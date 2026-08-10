@@ -1,0 +1,17 @@
+.vscode
+.env
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.swep-venv/
+swep-venv/
+.pytest_cache/
+.mypy_cache/
+.mypy_cache
+.claude
+CLAUDE.md
+*.sqlite3
+.agents
+skills-lock.json

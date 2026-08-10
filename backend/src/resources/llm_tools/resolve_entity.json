@@ -1,0 +1,25 @@
+{
+  "type": "function",
+  "function": {
+    "name": "resolve_entity",
+    "description": "Look up the real URI(s) for a name the user mentioned (species, city, botanical garden, ...) via full-text search over rdfs:label. Returns ranked candidates with their labels and match scores. Prefer this over guessing a URI. For species, pass the scientific (Latin) name, not a common name.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "term": {
+          "type": "string",
+          "description": "The name/label to look up, e.g. 'Achillea millefolium' or 'Jena'."
+        },
+        "type": {
+          "type": "string",
+          "description": "Optional class to narrow results, matched by the class' local name, e.g. 'dwc:Organism' or 'schema:City'."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Optional maximum number of candidates to return (default 5)."
+        }
+      },
+      "required": ["term"]
+    }
+  }
+}

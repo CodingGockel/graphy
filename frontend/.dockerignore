@@ -1,0 +1,9 @@
+node_modules/
+.svelte-kit/
+build/
+.env
+.env.*
+*.log
+frontend-server.log
+frontend-server-error.log
+Frame_1__1_.pdf

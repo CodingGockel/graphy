@@ -1,0 +1,14 @@
+.swep-venv/
+swep-venv/
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+tests/
+logs/
+.env
+.env.example
+*.log

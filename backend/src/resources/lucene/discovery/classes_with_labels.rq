@@ -1,0 +1,14 @@
+# DISCOVERY (run by hand when configuring the Lucene index for a new KG).
+# Which classes carry rdfs:label, and for how many instances? The named-entity types
+# worth indexing for resolve_entity are the ones with a moderate count of real-world
+# labels (species, places, organizations) — NOT verbose reified statement units whose
+# labels encode whole sentences. Use this to pick the connector's "types".
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+SELECT ?class (COUNT(DISTINCT ?s) AS ?n) WHERE {
+  ?s a ?class ;
+     rdfs:label ?l .
+  FILTER(isIRI(?class))
+  FILTER(!STRSTARTS(STR(?class), "http://www.w3.org/"))
+}
+GROUP BY ?class
+ORDER BY DESC(?n)

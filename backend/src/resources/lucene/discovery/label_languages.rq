@@ -1,0 +1,11 @@
+# DISCOVERY (run by hand). Language-tag distribution over rdfs:label literals. Reveals
+# whether the graph carries multilingual / common-name labels (e.g. de, en) that the
+# index should cover so users can resolve names in their own language. An empty tag ("")
+# means an untyped/plain literal (often a scientific name or a verbose statement label).
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+SELECT ?lang (COUNT(*) AS ?n) WHERE {
+  ?s rdfs:label ?l .
+  BIND(LANG(?l) AS ?lang)
+}
+GROUP BY ?lang
+ORDER BY DESC(?n)

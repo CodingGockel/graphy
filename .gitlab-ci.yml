@@ -1,0 +1,32 @@
+stages:
+  - test
+
+backend:test:
+  stage: test
+  image: python:3.12-slim
+  before_script:
+    - cd backend
+    - pip install --no-cache-dir -r requirements.txt
+  script:
+    - pytest tests/ -v
+  only:
+    changes:
+      - backend/**/*
+
+.hidden_job:
+  frontend:test:
+    stage: test
+    rules:
+    - when: never
+    image: node:20-slim
+    before_script:
+      - cd frontend
+      - npm ci
+
+    script:
+      - npm run check
+      - npm run test
+    only:
+      changes:
+        - frontend/**/*
+        

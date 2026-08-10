@@ -1,0 +1,17 @@
+{
+  "type": "function",
+  "function": {
+    "name": "use_previous_results",
+    "description": "Answer using data from a previous query in this conversation, without querying GraphDB again. Use when the existing data is sufficient.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "reference_turn": {
+          "type": "integer",
+          "description": "1-indexed turn number in the conversation whose SPARQL results should be reused"
+        }
+      },
+      "required": ["reference_turn"]
+    }
+  }
+}

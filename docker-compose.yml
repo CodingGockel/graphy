@@ -1,0 +1,91 @@
+# Root orchestrator for the whole stack: postgres + backend + web (nginx).
+# Configure via the single root .env (copy .env.example -> .env and fill in secrets).
+#
+# Public entrypoint: the `web` service on ${WEB_PORT} (default 80). It serves the
+# static frontend and proxies /api to the backend, so nothing else needs to be
+# published to the host.
+#
+# NOTE: the backend talks to an EXTERNAL GraphDB (GRAPHDB_BASE_URL) that is gated
+# behind the university VPN. The Docker host must have a network route to it for the
+# app to function — see README "Production / Docker" for the networking options.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # LLM (Blablador / OpenAI-compatible)
+      BLABLADOR_API_KEY: ${BLABLADOR_API_KEY}
+      BLABLADOR_BASE_URL: ${BLABLADOR_BASE_URL}
+      BLABLADOR_SPARQL_MODEL: ${BLABLADOR_SPARQL_MODEL}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE}
+      # GraphDB (external, VPN-gated)
+      GRAPHDB_BASE_URL: ${GRAPHDB_BASE_URL}
+      GRAPHDB_REPOSITORY: ${GRAPHDB_REPOSITORY}
+      # Prompts / full table
+      SYSTEM_PROMPT_PATH: ${SYSTEM_PROMPT_PATH}
+      FULL_TABLE_QUERY_PATH: ${FULL_TABLE_QUERY_PATH}
+      FULL_TABLE_COLUMNS: ${FULL_TABLE_COLUMNS}
+      # Database — built from the postgres vars so there is a single source of truth.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # Chat service
+      CHAT_HISTORY_DEPTH: ${CHAT_HISTORY_DEPTH}
+      CHAT_MAX_TOOL_ITERATIONS: ${CHAT_MAX_TOOL_ITERATIONS}
+      # CORS — empty by default (same-origin behind nginx). JSON list to override.
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS}
+      # uvicorn worker count
+      UVICORN_WORKERS: ${UVICORN_WORKERS}
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        # Defaults to relative /api/v1 (proxied by this service's nginx).
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${WEB_PORT:-80}:80"
+
+  # Optional public tunnel — exposes the app on a temporary public https:// URL via
+  # Cloudflare, WITHOUT port-forwarding/firewall changes. Off by default; only runs
+  # when you opt in with the "tunnel" profile:
+  #
+  #   docker compose --profile tunnel up -d
+  #   docker compose logs cloudflared | grep trycloudflare.com   # <- your link
+  #
+  # The URL is random and changes on every restart (Cloudflare "Quick Tunnel", no
+  # account needed). Anyone with the link can use the app (and spend your LLM key),
+  # and it only works while the host is on the VPN so GraphDB is reachable.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    profiles: ["tunnel"]
+    depends_on:
+      - web
+    # --protocol http2: use TCP instead of the default QUIC/UDP edge connection.
+    # University networks / VPNs commonly block outbound UDP (port 7844), which makes
+    # the QUIC handshake time out ("failed to dial to edge with quic").
+    command: tunnel --no-autoupdate --protocol http2 --url http://web:80
+
+volumes:
+  db_data:

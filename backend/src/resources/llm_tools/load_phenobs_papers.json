@@ -1,0 +1,12 @@
+{
+  "type": "function",
+  "function": {
+    "name": "load_phenobs_papers",
+    "description": "Load the first pages of all PhenObs scientific publications into context. Use this tool when the user asks about PhenObs scientific output, published papers, or what research questions can be answered using PhenObs data. This tool requires no arguments.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  }
+}

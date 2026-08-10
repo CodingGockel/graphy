@@ -1,0 +1,13 @@
+{
+  "base": "http://example.com/base/",
+  "dcterms": "http://purl.org/dc/terms/",
+  "dwc": "http://rs.tdwg.org/dwc/terms/",
+  "geo": "http://www.w3.org/2003/01/geo/wgs84_pos#",
+  "obo": "http://purl.obolibrary.org/obo/",
+  "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+  "schema": "http://schema.org/",
+  "semunit": "http://example.com/semunit/",
+  "time": "http://www.w3.org/2006/time#",
+  "wdt": "http://www.wikidata.org/prop/direct/",
+  "xsd": "http://www.w3.org/2001/XMLSchema#"
+}

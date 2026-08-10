@@ -1,0 +1,17 @@
+{
+  "type": "function",
+  "function": {
+    "name": "execute_sparql_query",
+    "description": "Execute a SPARQL query against the knowledge graph. Use this when the user asks for new data not covered by previous queries.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "A valid SPARQL SELECT or ASK query"
+        }
+      },
+      "required": ["query"]
+    }
+  }
+}

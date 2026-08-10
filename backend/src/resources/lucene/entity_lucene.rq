@@ -1,0 +1,35 @@
+PREFIX :<http://www.ontotext.com/connectors/lucene#>
+PREFIX inst:<http://www.ontotext.com/connectors/lucene/instance#>
+INSERT DATA {
+	inst:entity_lucene :createConnector '''
+    {
+    "fields": [
+        {
+        "fieldName": "label",
+        "propertyChain": [
+            "http://www.w3.org/2000/01/rdf-schema#label"
+        ],
+        "indexed": true,
+        "stored": true,
+        "analyzed": true,
+        "multivalued": true,
+        "ignoreInvalidValues": false,
+        "facet": false
+        }
+    ],
+    "languages": [],
+    "types": [
+        "http://rs.tdwg.org/dwc/terms/Organism",
+        "http://rs.tdwg.org/dwc/terms/Taxon",
+        "http://schema.org/City",
+        "http://purl.obolibrary.org/obo/ENVO_BotanicalGarden"
+    ],
+    "readonly": false,
+    "detectFields": false,
+    "importGraph": false,
+    "skipInitialIndexing": false,
+    "boostProperties": [],
+    "stripMarkup": false
+    }
+    ''' .
+}

@@ -1,0 +1,13 @@
+# SCHEMA EXTRACTION (run by build_prompt.py, not at chat time).
+# Every class that actually has instances, with its instance count. Counts matter:
+# they tell the LLM which classes are the real-world entities (many instances) vs.
+# rare structural/annotation nodes. Pure RDF/RDFS/OWL/XSD infrastructure types are
+# excluded; domain vocabularies (incl. W3C time:) are kept.
+SELECT ?class (COUNT(?s) AS ?n) WHERE {
+  ?s a ?class .
+  FILTER(isIRI(?class))
+  FILTER(!regex(str(?class),
+    "^http://www.w3.org/(1999/02/22-rdf-syntax-ns|2000/01/rdf-schema|2002/07/owl|2001/XMLSchema)"))
+}
+GROUP BY ?class
+ORDER BY DESC(?n)

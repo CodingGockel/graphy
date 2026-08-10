@@ -1,0 +1,6 @@
+[tool.pytest.ini_options]
+# Run async test functions without a per-test marker.
+asyncio_mode = "auto"
+# Make `import src...` resolve when running pytest from backend/.
+pythonpath = ["."]
+testpaths = ["tests"]

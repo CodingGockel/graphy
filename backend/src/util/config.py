@@ -1,0 +1,62 @@
+from functools import lru_cache
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+class Settings(BaseSettings):
+    # llm settings
+    blablador_api_key: str
+    blablador_base_url: str
+    blablador_sparql_model: str
+    # Sampling controls for the LLM calls (tool loop + final answer).
+    llm_temperature: float = 0.1
+    llm_max_tokens: int | None = None
+
+    # graphdb settings
+    graphdb_base_url: str
+    graphdb_repository: str
+
+    # DB settings
+    database_url: str
+
+    # CORS: JSON list of allowed origins (e.g. ["https://app.example.org"]). With the
+    # production setup the frontend is served same-origin behind nginx (relative
+    # /api/v1), so this can be left empty. Set explicit origins when the frontend is
+    # served from another host (e.g. local dev against a remote backend).
+    cors_allow_origins: list[str] = []
+
+    # Chat settings
+    chat_history_depth: int
+    chat_max_tool_iterations: int
+    # The generated query-generation prompt the backend loads at runtime.
+    # Produced by src/services/build_prompt.py from the template below.
+    system_prompt_path: str
+    # Generated prompt for the dedicated final answer call (built by build_prompt.py).
+    answer_system_prompt_path: str = "src/resources/prompts/answer_system_prompt.md"
+    # Inputs to build_prompt.py (two-layer composition).
+    # Query side: generic skeleton (KG-agnostic) with {{KG_PROFILE}} + {{SCHEMA}} markers,
+    #   and the hand-maintained per-KG profile.
+    generic_rules_path: str = "src/resources/prompts/templates/generic_rules.md"
+    kg_profile_path: str = "src/resources/prompts/templates/kg_profile.md"
+    # Answer side: generic skeleton (KG-agnostic) with a {{KG_ANSWER_PROFILE}} marker,
+    #   and the hand-maintained per-KG answer profile.
+    generic_answer_path: str = "src/resources/prompts/templates/generic_answer.md"
+    kg_answer_profile_path: str = "src/resources/prompts/templates/kg_answer_profile.md"
+    # Canonical prefix->namespace map written by build_prompt.py; used at chat time to
+    # repair queries that declare a known prefix with a wrong (hallucinated) namespace.
+    schema_prefixes_path: str = "src/resources/schema/prefixes.json"
+    
+    # Full table settings
+    full_table_query_path: str = "src/resources/queries/full_table.rq"
+    full_table_columns: list[str] = [
+        "species", "garden", "city", "country", "lat", "long",
+        "year", "firstFlowerDay", "lastFlowerDay", "floweringDuration",
+    ]
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False
+    )
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()  # type: ignore

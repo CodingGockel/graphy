@@ -1,0 +1,17 @@
+# SCHEMA EXTRACTION (run by build_prompt.py, not at chat time).
+# Every predicate actually used in the data, with the kind of object it points at and
+# how often. The object "kind" is the real, data-level datatype (e.g. xsd:int vs
+# xsd:integer) or "iri"/"bnode" for resources — this is what lets the prompt warn the
+# LLM about exact-datatype literal matching. rdf:type is excluded (always an IRI and
+# already covered by classes.rq). build_prompt.py groups these rows per predicate.
+SELECT ?p ?kind (COUNT(*) AS ?n) WHERE {
+  ?s ?p ?o .
+  FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>)
+  BIND(
+    IF(isIRI(?o), "iri",
+    IF(isBlank(?o), "bnode",
+    IF(LANG(?o) != "", CONCAT("rdf:langString@", LANG(?o)),
+    STR(DATATYPE(?o))))) AS ?kind)
+}
+GROUP BY ?p ?kind
+ORDER BY ?p DESC(?n)

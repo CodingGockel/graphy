@@ -1,0 +1,11 @@
+# DISCOVERY (run by hand). All predicates used on instances of one candidate type, with
+# counts. Replace <TYPE> with a class from classes_with_labels.rq to find which text
+# properties (beyond rdfs:label) exist — e.g. a dedicated dwc:vernacularName, a synonym
+# or an identifier worth adding to the connector's propertyChain. If common names live
+# only inside rdfs:label (as in the phenology KG), there is nothing extra to index.
+SELECT ?p (COUNT(*) AS ?n) WHERE {
+  ?s a <TYPE> ;
+     ?p ?o .
+}
+GROUP BY ?p
+ORDER BY DESC(?n)
