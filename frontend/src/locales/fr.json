@@ -1,0 +1,83 @@
+{
+  "sidebar": {
+    "label": "Navigation",
+    "newSession": "Nouvelle session",
+    "addSession": "Ajouter une session",
+    "sessions": "Sessions",
+    "empty": "Aucune session pour l’instant.",
+    "settings": "Paramètres",
+    "openMenu": "Ouvrir le menu",
+    "closeMenu": "Fermer le menu"
+  },
+  "status": {
+    "title": "État des services",
+    "summary_ok": "Tous les services disponibles",
+    "summary_degraded": "Disponibilité partielle",
+    "summary_down": "Panne",
+    "summary_unknown": "Vérification …",
+    "unreachable": "Backend injoignable",
+    "state_ok": "OK",
+    "state_degraded": "Dégradé",
+    "state_down": "En panne",
+    "state_unknown": "Inconnu",
+    "backend": "Backend",
+    "services": {
+      "sparql_service": "Graphe de connaissances",
+      "llm_service": "LLM"
+    },
+    "lastChecked": "Vérifié à {time}",
+    "refresh": "Actualiser l’état"
+  },
+  "session": {
+    "actions": "Actions",
+    "copyId": "Copier l’ID",
+    "copied": "Copié",
+    "copyFallback": "ID de session :",
+    "rename": "Renommer",
+    "titleLabel": "Titre",
+    "delete": "Supprimer",
+    "confirmDelete": "Supprimer la session « {title} » ? L’historique est aussi supprimé sur le backend.",
+    "deleteFailed": "Échec de la suppression : {error}"
+  },
+  "addSession": {
+    "title": "Ajouter une session",
+    "description": "Saisis l’ID d’une session existante.",
+    "label": "ID de session",
+    "submit": "Ajouter",
+    "cancel": "Annuler",
+    "checking": "Vérification …",
+    "invalid": "Ce n’est pas un ID de session valide.",
+    "notFound": "Aucune session trouvée avec cet ID."
+  },
+  "chat": {
+    "emptyText": "Pose une question au graphe de connaissances.",
+    "inputLabel": "Message",
+    "placeholder": "Saisir une question …",
+    "send": "Envoyer",
+    "stop": "Arrêter",
+    "you": "Toi",
+    "thinking": "Graphy réfléchit …",
+    "loadingHistory": "Chargement de l’historique …",
+    "aborted": "Requête annulée.",
+    "retry": "Réessayer",
+    "details": "Détails"
+  },
+  "errors": {
+    "network": "Le backend est injoignable.",
+    "unavailable": "Un service requis est actuellement indisponible.",
+    "upstream": "Un service a signalé une erreur.",
+    "notFound": "Introuvable.",
+    "generic": "Une erreur est survenue."
+  },
+  "settings": {
+    "title": "Paramètres",
+    "language": "Langue",
+    "theme": "Apparence",
+    "theme_system": "Système",
+    "theme_light": "Clair",
+    "theme_dark": "Sombre"
+  },
+  "dialog": {
+    "close": "Fermer"
+  }
+}

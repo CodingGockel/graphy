@@ -1,0 +1,190 @@
+<script setup lang="ts">
+import { computed, nextTick, ref, watch } from 'vue'
+import AppLogo from './AppLogo.vue'
+import ChatInput from './ChatInput.vue'
+import ChatMessage from './ChatMessage.vue'
+import { useI18n } from '../i18n'
+import { errorHeadline } from '../lib/errors'
+import { aborted, chatError, loadingHistory, messages, pending, send, stop } from '../state/chat'
+
+const { t } = useI18n()
+const scroller = ref<HTMLElement | null>(null)
+
+const isEmpty = computed(
+  () => messages.value.length === 0 && !loadingHistory.value && !pending.value && !chatError.value,
+)
+
+// Keep the newest content in view.
+watch(
+  () => [messages.value, messages.value.length, pending.value, aborted.value, chatError.value],
+  async () => {
+    await nextTick()
+    const el = scroller.value
+    if (el) el.scrollTop = el.scrollHeight
+  },
+)
+</script>
+
+<template>
+  <div class="chat">
+    <div ref="scroller" class="scroll">
+      <div class="column">
+        <div v-if="isEmpty" class="empty">
+          <AppLogo :size="44" class="empty-logo" />
+          <h1>Graphy</h1>
+          <p>{{ t('chat.emptyText') }}</p>
+        </div>
+
+        <ChatMessage v-for="message in messages" :key="message.id" :message="message" />
+
+        <p v-if="loadingHistory" class="status">{{ t('chat.loadingHistory') }}</p>
+        <div v-if="pending" class="thinking" role="status">
+          <AppLogo :size="26" class="avatar" />
+          <p class="bubble">{{ t('chat.thinking') }}</p>
+        </div>
+        <p v-if="aborted" class="status">{{ t('chat.aborted') }}</p>
+
+        <div v-if="chatError" class="error" role="alert">
+          <p class="headline">{{ errorHeadline(chatError.error) }}</p>
+          <details v-if="chatError.error.status !== 0" class="details">
+            <summary>{{ t('chat.details') }}</summary>
+            <p>
+              <template v-if="chatError.error.status > 0">{{ chatError.error.status }} · </template>
+              {{ chatError.error.message }}
+            </p>
+            <pre v-if="chatError.error.detail">{{ chatError.error.detail }}</pre>
+          </details>
+          <button type="button" class="btn" @click="chatError.retry()">{{ t('chat.retry') }}</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="bottom">
+      <div class="column">
+        <ChatInput :pending :disabled="loadingHistory" @send="send" @stop="stop" />
+      </div>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.chat {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.column {
+  width: 100%;
+  max-width: var(--content-width);
+  margin: 0 auto;
+  padding: 0 1rem;
+}
+
+.scroll .column {
+  padding-top: 1.5rem;
+  padding-bottom: 1rem;
+}
+
+.bottom {
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 18vh 0 2rem;
+  text-align: center;
+}
+
+.empty-logo {
+  margin-bottom: 1rem;
+}
+
+.empty h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.empty p {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.status {
+  margin: 0 0 1.25rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+/* Mirrors the assistant bubble in ChatMessage.vue. */
+.thinking {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  margin: 0 0 1.25rem;
+}
+
+.thinking .avatar {
+  margin-top: 0.3rem;
+}
+
+.thinking .bubble {
+  margin: 0;
+  padding: 0.65rem 0.95rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  border-top-left-radius: 4px;
+  color: var(--text-muted);
+}
+
+@media (max-width: 767px) {
+  .thinking .avatar {
+    display: none;
+  }
+}
+
+.error {
+  margin: 0 0 1.25rem;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  background: var(--danger-subtle);
+}
+
+.headline {
+  margin: 0 0 0.5rem;
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.details {
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+}
+
+.details summary {
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.details p {
+  margin: 0.5rem 0 0;
+}
+
+.details pre {
+  margin: 0.5rem 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+</style>

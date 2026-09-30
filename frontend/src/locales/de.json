@@ -1,0 +1,83 @@
+{
+  "sidebar": {
+    "label": "Navigation",
+    "newSession": "Neue Session",
+    "addSession": "Session hinzufügen",
+    "sessions": "Sessions",
+    "empty": "Noch keine Sessions.",
+    "settings": "Einstellungen",
+    "openMenu": "Menü öffnen",
+    "closeMenu": "Menü schließen"
+  },
+  "status": {
+    "title": "Dienststatus",
+    "summary_ok": "Alle Dienste verfügbar",
+    "summary_degraded": "Eingeschränkt verfügbar",
+    "summary_down": "Störung",
+    "summary_unknown": "Prüfe Status …",
+    "unreachable": "Backend nicht erreichbar",
+    "state_ok": "OK",
+    "state_degraded": "Eingeschränkt",
+    "state_down": "Ausgefallen",
+    "state_unknown": "Unbekannt",
+    "backend": "Backend",
+    "services": {
+      "sparql_service": "Knowledge Graph",
+      "llm_service": "LLM"
+    },
+    "lastChecked": "Geprüft um {time}",
+    "refresh": "Status aktualisieren"
+  },
+  "session": {
+    "actions": "Aktionen",
+    "copyId": "ID kopieren",
+    "copied": "Kopiert",
+    "copyFallback": "Session-ID:",
+    "rename": "Umbenennen",
+    "titleLabel": "Titel",
+    "delete": "Löschen",
+    "confirmDelete": "Session „{title}“ löschen? Der Verlauf wird auch im Backend gelöscht.",
+    "deleteFailed": "Löschen fehlgeschlagen: {error}"
+  },
+  "addSession": {
+    "title": "Session hinzufügen",
+    "description": "Gib die ID einer bestehenden Session ein.",
+    "label": "Session-ID",
+    "submit": "Hinzufügen",
+    "cancel": "Abbrechen",
+    "checking": "Prüfe …",
+    "invalid": "Das ist keine gültige Session-ID.",
+    "notFound": "Keine Session mit dieser ID gefunden."
+  },
+  "chat": {
+    "emptyText": "Stelle eine Frage an den Knowledge Graph.",
+    "inputLabel": "Nachricht",
+    "placeholder": "Frage eingeben …",
+    "send": "Senden",
+    "stop": "Stopp",
+    "you": "Du",
+    "thinking": "Graphy denkt nach …",
+    "loadingHistory": "Lade Verlauf …",
+    "aborted": "Anfrage abgebrochen.",
+    "retry": "Erneut versuchen",
+    "details": "Details"
+  },
+  "errors": {
+    "network": "Das Backend ist nicht erreichbar.",
+    "unavailable": "Ein benötigter Dienst ist gerade nicht erreichbar.",
+    "upstream": "Ein Dienst hat einen Fehler gemeldet.",
+    "notFound": "Nicht gefunden.",
+    "generic": "Etwas ist schiefgelaufen."
+  },
+  "settings": {
+    "title": "Einstellungen",
+    "language": "Sprache",
+    "theme": "Darstellung",
+    "theme_system": "System",
+    "theme_light": "Hell",
+    "theme_dark": "Dunkel"
+  },
+  "dialog": {
+    "close": "Schließen"
+  }
+}

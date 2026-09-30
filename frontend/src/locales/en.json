@@ -1,0 +1,83 @@
+{
+  "sidebar": {
+    "label": "Navigation",
+    "newSession": "New session",
+    "addSession": "Add session",
+    "sessions": "Sessions",
+    "empty": "No sessions yet.",
+    "settings": "Settings",
+    "openMenu": "Open menu",
+    "closeMenu": "Close menu"
+  },
+  "status": {
+    "title": "Service status",
+    "summary_ok": "All services available",
+    "summary_degraded": "Partially available",
+    "summary_down": "Service outage",
+    "summary_unknown": "Checking status …",
+    "unreachable": "Backend unreachable",
+    "state_ok": "OK",
+    "state_degraded": "Degraded",
+    "state_down": "Down",
+    "state_unknown": "Unknown",
+    "backend": "Backend",
+    "services": {
+      "sparql_service": "Knowledge graph",
+      "llm_service": "LLM"
+    },
+    "lastChecked": "Checked at {time}",
+    "refresh": "Refresh status"
+  },
+  "session": {
+    "actions": "Actions",
+    "copyId": "Copy ID",
+    "copied": "Copied",
+    "copyFallback": "Session ID:",
+    "rename": "Rename",
+    "titleLabel": "Title",
+    "delete": "Delete",
+    "confirmDelete": "Delete session “{title}”? The history is also deleted on the backend.",
+    "deleteFailed": "Delete failed: {error}"
+  },
+  "addSession": {
+    "title": "Add session",
+    "description": "Enter the ID of an existing session.",
+    "label": "Session ID",
+    "submit": "Add",
+    "cancel": "Cancel",
+    "checking": "Checking …",
+    "invalid": "This is not a valid session ID.",
+    "notFound": "No session found with this ID."
+  },
+  "chat": {
+    "emptyText": "Ask the knowledge graph a question.",
+    "inputLabel": "Message",
+    "placeholder": "Type a question …",
+    "send": "Send",
+    "stop": "Stop",
+    "you": "You",
+    "thinking": "Graphy is thinking …",
+    "loadingHistory": "Loading history …",
+    "aborted": "Request cancelled.",
+    "retry": "Try again",
+    "details": "Details"
+  },
+  "errors": {
+    "network": "The backend is not reachable.",
+    "unavailable": "A required service is currently unavailable.",
+    "upstream": "A service reported an error.",
+    "notFound": "Not found.",
+    "generic": "Something went wrong."
+  },
+  "settings": {
+    "title": "Settings",
+    "language": "Language",
+    "theme": "Appearance",
+    "theme_system": "System",
+    "theme_light": "Light",
+    "theme_dark": "Dark"
+  },
+  "dialog": {
+    "close": "Close"
+  }
+}
