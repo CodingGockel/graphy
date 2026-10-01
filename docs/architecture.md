@@ -1,113 +1,101 @@
 # Architecture
 
-DataExplorer turns a natural-language question into a SPARQL query, runs it against a GraphDB
-knowledge graph, and answers in natural language. This document explains how the parts fit together
-and how a single request flows through the backend.
+Graphy turns a natural-language question into SPARQL, runs it against a GraphDB knowledge graph and
+answers in natural language. The LLM drives this itself by calling tools in a loop.
 
 ## Components
 
 | Component | Tech | Responsibility |
 |-----------|------|----------------|
-| Frontend | SvelteKit 5 | Chat UI, results table, map view. Talks to the backend over HTTP. |
-| Backend | FastAPI | Orchestrates the LLM tool loop, runs SPARQL, persists chat history. |
-| Knowledge graph | GraphDB | Stores the biodiversity RDF data; answers SPARQL queries. |
-| Database | PostgreSQL | Stores sessions and their message history. |
-| LLM | Blablador (OpenAI-compatible) | Generates SPARQL and natural-language answers via tool calling. |
+| Frontend | Vue 3 + Vite | Chat UI, session sidebar, settings, service status. See [Frontend](./frontend.md). |
+| Backend | FastAPI | Runs the LLM tool loop, executes SPARQL, stores chat history. |
+| Knowledge graph | GraphDB | Holds the RDF data, answers SPARQL, provides the Lucene full-text index. |
+| Database | PostgreSQL | Sessions and their messages. |
+| LLM | Blablador (OpenAI-compatible) | Picks tools, writes SPARQL, writes the answer. |
 
-## Request flow
+## Backend layout
 
-For `POST /api/v1/chat`, the layering is **router → service → (LLMService / SparqlService)**:
+Requests flow **router → service → LLMService / SparqlService / LuceneService**.
 
-1. **Router** (`backend/src/api/v1/chat.py`) receives the `ChatRequest` (`message`, optional
-   `session_id`) and delegates to `ChatService`.
-2. **`ChatService`** (`services/chat_service.py`):
-   - Resolves the session (creates a new one if `session_id` is missing or unknown).
-   - Loads the last `CHAT_HISTORY_DEPTH` turns of history from PostgreSQL via `ChatRepository`.
-   - Runs the **agentic tool-calling loop** (below).
-   - Persists the user message and the assistant answer.
-   - Returns a `ChatResponse` (`answer`, `session_id`, `llm_generated_query`,
-     `sparql_query_result`).
-3. **`LLMService`** (`services/llm_service.py`) wraps the Blablador client and drives the tool
-   loop. **`SparqlService`** (`services/sparql_service.py`) executes SPARQL against GraphDB.
+| Path (`backend/src/`) | Role |
+|-----------------------|------|
+| `main.py` | App setup (`lifespan`): creates the LLM and HTTP clients, initializes the DB, runs a startup health check, mounts the routers under `/api/v1`. |
+| `api/v1/` | Routers: `chat`, `session`, `health`. |
+| `api/dependencies.py` | Dependency injection: builds the services from `app.state`. |
+| `api/exception_handlers.py` | Maps domain exceptions to HTTP 502 / 503. |
+| `services/chat_service.py` | The tool loop and persistence of each turn. |
+| `services/llm_service.py` | Wraps the OpenAI client: tool-calling turns and the final answer call. |
+| `services/sparql_service.py` | Runs SPARQL over HTTP against GraphDB. |
+| `services/lucene_service.py` | Entity lookup in the Lucene index (`resolve_entity`). |
+| `services/session_service.py` | Read, replace and delete a session's history. |
+| `services/build_prompt.py`, `lucene_setup.py` | Standalone CLIs to build the prompts and the Lucene index (see [Knowledge graph](./knowledge-graph.md)). |
+| `db/` | Async SQLAlchemy: `models.py` (`Session`, `Message`), `repository.py`, `database.py`. |
+| `resources/` | Prompts and templates, tool definitions, schema queries, Lucene connector, fixed queries. |
 
-## The agentic tool loop
+## A chat request
 
-Instead of a fixed "generate query → run → answer" pipeline, the LLM drives the process by calling
-tools. The loop is bounded by `CHAT_MAX_TOOL_ITERATIONS`. Tool definitions live in
-`backend/src/resources/llm_tools/*.json` and are loaded by `util/llm_utils.py:load_tools()`:
+`POST /api/v1/chat` with `{ message, session_id }`:
 
-| Tool | Purpose |
-|------|---------|
-| `resolve_entity` | Resolve a name (species, place, …) to real URI(s) via the Lucene full-text index over `rdfs:label`. |
-| `execute_sparql_query` | Run a new SPARQL query against GraphDB. |
-| `use_previous_results` | Reuse the results of an earlier turn (by `reference_turn`) without re-querying. |
-| `ask_clarification` | Return a clarification question to the user; ends the loop. |
+1. **Session:** if `session_id` is missing *or unknown*, a new session is created.
+2. **History:** the last `CHAT_HISTORY_DEPTH` turns are loaded from PostgreSQL.
+3. **Tool loop:** the LLM works on the question (below).
+4. **Persist:** the user message and the answer (plus the last query and its results) are stored.
+5. **Response:** `answer`, `session_id`, `llm_generated_query`, `sparql_query_result`.
 
-Each iteration:
+## The tool loop
 
-- The model either **calls a tool** or **stops calling tools**. When it stops, the final
-  natural-language answer is produced by a separate `LLMService.generate_answer()` call over the
-  data collected in the loop (using the answer prompt). If no query was ever run, the model's own
-  plain text is used as the answer.
-- When it calls `resolve_entity`, the name is looked up in the Lucene index and the candidate URIs
-  are fed back; when it calls `execute_sparql_query`, the query is run and the results are fed back —
-  in both cases so the model can act on them or query further.
-- **Bad-query retry:** if GraphDB rejects a query (HTTP 400 → `SparqlQueryException`), the error
-  text is fed back to the model as the tool result, so it can fix the query and try again within
-  the same loop. Infrastructure failures (`SparqlDatabaseException` / `SparqlDatabaseStatusCode`)
-  are *not* retried — they abort the request.
-- If the loop hits `CHAT_MAX_TOOL_ITERATIONS`, `generate_answer()` forces a final answer from
-  whatever data was gathered.
+The LLM picks one tool per iteration, at most `CHAT_MAX_TOOL_ITERATIONS` times. Tool definitions are
+JSON files in `backend/src/resources/llm_tools/`.
 
-Some models don't support structured tool calls; `LLMService` also recovers tool calls that arrive
-as text (XML/JSON/markdown-fenced).
+| Tool | What it does |
+|------|--------------|
+| `resolve_entity` | Looks up a name (species, place, …) in the Lucene index and returns candidate URIs, so the LLM doesn't guess them. |
+| `execute_sparql_query` | Runs a SPARQL query and feeds the results back. |
+| `use_previous_results` | Reuses the results of an earlier turn (`reference_turn`) instead of querying again. |
+| `ask_clarification` | Returns a question to the user and ends the loop. |
+| `load_phenobs_papers` | PhenObs-specific: loads the first pages of the PhenObs publications (PDFs in `resources/phenobs_papers/`) into context. |
 
-> **Clarification** is just the `ask_clarification` tool's question returned through the normal
-> `answer` field. There is no separate flag in the response. (The old `followup_question` field and
-> the `[RETURN_QUESTION]` token have been removed.)
+**How the loop ends:**
+
+- **The LLM stops calling tools.** If it ran queries, a separate `generate_answer()` call writes the
+  final answer from the collected data, using the answer prompt. If it never queried, its own text
+  is the answer.
+- **The iteration limit is reached.** `generate_answer()` forces an answer from whatever data exists.
+- **The LLM calls `ask_clarification`.** Its question is returned as the normal `answer`; there is
+  no separate flag.
+
+**Errors inside the loop:**
+
+- **Bad query** (GraphDB answers HTTP 400 → `SparqlQueryException`): the error text goes back to the
+  LLM as the tool result, so it can fix the query and retry.
+- **Infrastructure errors** (`SparqlDatabaseException`, `SparqlDatabaseStatusCode`): these abort the
+  request.
+
+**Model quirks:**
+
+- **Tool calls as plain text:** some models send tool calls as text (XML, JSON, fenced). `LLMService`
+  recovers these.
+- **Reasoning in the answer:** `generate_answer()` strips `<think>…</think>` blocks. When the model
+  answers directly without any tool, the raw text including `<think>` is returned. The frontend
+  splits this off into a collapsible "Reasoning" section.
 
 ## Persistence
 
-Sessions and messages are stored in PostgreSQL through an async SQLAlchemy layer in
-`backend/src/db/`:
+`init_db()` creates the tables at startup (`Base.metadata.create_all`). It does not alter existing
+tables, and there are no migrations yet. Each message row stores `role` and `content`, plus at most
+one `sparql_query` / `sparql_results`. When a turn runs several queries, only the last one is kept.
 
-- `models.py` — `Session` and `Message` ORM models.
-- `repository.py` — `ChatRepository` (load history, append messages).
-- `database.py` — `init_db()` builds the engine + async sessionmaker and **creates tables at
-  startup** (called from `main.py`'s lifespan).
+Because history lives on the server, a client only has to remember the `session_id`.
 
-Because history lives server-side, a client only needs to remember its `session_id`. See
-[Chat & sessions guide](./frontend_chat_sessions.md).
+## Errors
 
-## Configuration & startup
+The API maps domain exceptions to status codes and returns
+`{ "status": "error", "error": "...", "detail": "..." }`:
 
-`main.py` (FastAPI `lifespan`) creates the Blablador client and an `httpx` client, calls
-`init_db()`, runs a startup **health check**, and registers the routers under `/api/v1`.
-Settings come from `backend/.env` via `util/config.py` (`get_settings()`), read once at startup and
-**read-only at runtime** (there is no settings API). See [Configuration](./configuration.md).
+- **502** — an upstream service answered with an error (bad SPARQL status, empty LLM output).
+- **503** — the LLM API or GraphDB is unreachable.
 
-## Error handling
+## What's next
 
-Domain exceptions are mapped to HTTP status codes in `api/exception_handlers.py`:
-
-- **502 Bad Gateway** — an upstream service returned an invalid response.
-- **503 Service Unavailable** — a dependency (LLM API or GraphDB) is unreachable.
-
-Errors use the `ErrorResponse` shape: `{ "status": "error", "error": "...", "detail": "..." }`.
-See [API reference](./api_reference.md).
-
-## Other endpoints
-
-Beyond chat, the backend exposes:
-
-- `GET /api/v1/chat/models` — list available LLM models.
-- `GET /api/v1/chat/full_table` — a fixed, server-side SPARQL query (no LLM) returning a tabular
-  view (columns from `FULL_TABLE_COLUMNS`, query from `FULL_TABLE_QUERY_PATH`).
-- `GET/PUT /api/v1/session/{id}/history`, `DELETE /api/v1/session/{id}` — session management.
-- `GET /api/v1/health/` — aggregated health of GraphDB + LLM.
-
-## GraphDB & Lucene
-
-SPARQL runs against `{GRAPHDB_BASE_URL}/repositories/{GRAPHDB_REPOSITORY}`. Full-text search uses
-GraphDB **Lucene connectors** built from `backend/src/resources/lucene/*.rq` by the standalone
-`lucene_setup.py` utility. See [GraphDB & SPARQL](./graphdb_sparql.md).
+The planned move to a streamed response (SSE): live steps, thinking and answer tokens, a session
+list, LLM-generated titles. See [plans/streaming-rework.md](./plans/streaming-rework.md).

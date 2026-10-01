@@ -2,7 +2,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import AddSessionDialog from './components/AddSessionDialog.vue'
 import AppIcon from './components/AppIcon.vue'
-import AppLogo from './components/AppLogo.vue'
+import AppWordmark from './components/AppWordmark.vue'
 import AppSidebar from './components/AppSidebar.vue'
 import ChatView from './components/ChatView.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
@@ -59,8 +59,7 @@ onBeforeUnmount(() => {
   <div class="layout">
     <header class="topbar">
       <span class="brand">
-        <AppLogo />
-        Graphy
+        <AppWordmark :height="24" />
         <span
           class="dot"
           :class="overallStatus"
@@ -145,9 +144,6 @@ onBeforeUnmount(() => {
     display: flex;
     align-items: center;
     gap: 0.6rem;
-    font-weight: 600;
-    font-size: 1.05rem;
-    letter-spacing: -0.01em;
   }
 
   .main {

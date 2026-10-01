@@ -1,15 +1,16 @@
 <script setup lang="ts">
-// The Graphy mark: a small triangle graph, same as public/favicon.svg.
-withDefaults(defineProps<{ size?: number }>(), { size: 22 })
+// The Graphy icon (speech bubble with a small graph), same as public/favicon.svg
+// and docs/designs/graphy-icon.svg.
+withDefaults(defineProps<{ size?: number }>(), { size: 24 })
 </script>
 
 <template>
-  <svg class="logo" :width="size" :height="size" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
-    <rect class="tile" width="32" height="32" rx="8" />
-    <path class="edges" d="M9 22 16 9 23 22Z" />
-    <circle class="node" cx="9" cy="22" r="3" />
-    <circle class="node" cx="16" cy="9" r="3" />
-    <circle class="node" cx="23" cy="22" r="3" />
+  <svg class="logo" :width="size" :height="size" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+    <path class="bubble" d="M22.6,0H77.4A22.6,22.6 0 0 1 100,22.6V59A22.6,22.6 0 0 1 77.4,81.6H44.6L23.4,98.2Q20,100.9 20,96.6V81.45A22.6,22.6 0 0 1 0,59V22.6A22.6,22.6 0 0 1 22.6,0Z" />
+    <path class="edges" d="M22.5,54L50,27L77.5,54" />
+    <circle class="node" cx="50" cy="27" r="8.6" />
+    <circle class="node" cx="22.5" cy="54" r="8.6" />
+    <circle class="node" cx="77.5" cy="54" r="8.6" />
   </svg>
 </template>
 
@@ -20,18 +21,19 @@ withDefaults(defineProps<{ size?: number }>(), { size: 22 })
 }
 
 /* CSS variables only work via CSS, not in SVG presentation attributes. */
-.tile {
-  fill: var(--accent);
+.bubble {
+  fill: var(--brand);
 }
 
 .edges {
   fill: none;
-  stroke: var(--accent-text);
-  stroke-width: 2;
+  stroke: #fff;
+  stroke-width: 4.8;
+  stroke-linecap: round;
   stroke-linejoin: round;
 }
 
 .node {
-  fill: var(--accent-text);
+  fill: #fff;
 }
 </style>

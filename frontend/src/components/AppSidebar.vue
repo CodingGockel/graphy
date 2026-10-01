@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import AppIcon from './AppIcon.vue'
-import AppLogo from './AppLogo.vue'
 import SessionItem from './SessionItem.vue'
 import StatusPanel from './StatusPanel.vue'
+import AppWordmark from './AppWordmark.vue'
 import { useI18n } from '../i18n'
 import { activeId, sortedSessions } from '../state/sessions'
 import { newSession, openSession } from '../state/chat'
@@ -32,7 +32,7 @@ function selectSession(id: string): void {
     :inert="mobile && !open ? true : undefined"
   >
     <div class="head">
-      <span class="brand"><AppLogo />Graphy</span>
+      <AppWordmark :height="26" class="brand" />
       <button
         v-if="mobile"
         type="button"
@@ -122,12 +122,7 @@ function selectSession(id: string): void {
 }
 
 .brand {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  font-weight: 600;
-  font-size: 1.05rem;
-  letter-spacing: -0.01em;
+  color: var(--text);
 }
 
 .primary {
@@ -155,6 +150,7 @@ function selectSession(id: string): void {
 }
 
 .sessions {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import AppLogo from './AppLogo.vue'
+import AppWordmark from './AppWordmark.vue'
 import ChatInput from './ChatInput.vue'
+import GraphLoader from './GraphLoader.vue'
 import ChatMessage from './ChatMessage.vue'
 import { useI18n } from '../i18n'
 import { errorHeadline } from '../lib/errors'
@@ -30,8 +32,9 @@ watch(
     <div ref="scroller" class="scroll">
       <div class="column">
         <div v-if="isEmpty" class="empty">
-          <AppLogo :size="44" class="empty-logo" />
-          <h1>Graphy</h1>
+          <h1>
+            <AppWordmark :height="52" />
+          </h1>
           <p>{{ t('chat.emptyText') }}</p>
         </div>
 
@@ -39,8 +42,11 @@ watch(
 
         <p v-if="loadingHistory" class="status">{{ t('chat.loadingHistory') }}</p>
         <div v-if="pending" class="thinking" role="status">
-          <AppLogo :size="26" class="avatar" />
-          <p class="bubble">{{ t('chat.thinking') }}</p>
+          <AppLogo :size="28" class="avatar" />
+          <div class="bubble">
+            <GraphLoader />
+            <span class="visually-hidden">{{ t('chat.thinking') }}</span>
+          </div>
         </div>
         <p v-if="aborted" class="status">{{ t('chat.aborted') }}</p>
 
@@ -76,6 +82,9 @@ watch(
 }
 
 .scroll {
+  /* Containing block for absolutely positioned children (e.g. .visually-hidden labels),
+     otherwise they extend the page height and the whole page scrolls. */
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -105,14 +114,9 @@ watch(
   text-align: center;
 }
 
-.empty-logo {
-  margin-bottom: 1rem;
-}
-
 .empty h1 {
-  margin: 0 0 0.5rem;
-  font-size: 1.5rem;
-  font-weight: 600;
+  margin: 0 0 1rem;
+  color: var(--text);
 }
 
 .empty p {
@@ -140,12 +144,12 @@ watch(
 }
 
 .thinking .bubble {
-  margin: 0;
-  padding: 0.65rem 0.95rem;
-  border: 1px dashed var(--border-strong);
+  position: relative;
+  padding: 0.7rem 0.95rem;
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   border-top-left-radius: 4px;
-  color: var(--text-muted);
+  background: var(--bg-subtle);
 }
 
 @media (max-width: 767px) {

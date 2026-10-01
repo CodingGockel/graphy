@@ -7,7 +7,7 @@
 #
 # NOTE: the backend talks to an EXTERNAL GraphDB (GRAPHDB_BASE_URL) that is gated
 # behind the university VPN. The Docker host must have a network route to it for the
-# app to function — see README "Production / Docker" for the networking options.
+# app to function — see docs/deployment.md.
 
 services:
   postgres:

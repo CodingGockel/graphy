@@ -1,14 +1,20 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import AppIcon from './AppIcon.vue'
 import AppLogo from './AppLogo.vue'
 import { useI18n } from '../i18n'
 import { renderMarkdown } from '../lib/markdown'
+import { splitThinking } from '../lib/thinking'
 import type { ChatEntry } from '../state/chat'
 
 const props = defineProps<{ message: ChatEntry }>()
 
 const { t } = useI18n()
-const html = computed(() => (props.message.role === 'assistant' ? renderMarkdown(props.message.content) : ''))
+// Reasoning (<think>…</think>) is shown separately and collapsed; only the rest is the answer.
+const split = computed(() =>
+  props.message.role === 'assistant' ? splitThinking(props.message.content) : { thinking: null, answer: '' },
+)
+const html = computed(() => (split.value.answer ? renderMarkdown(split.value.answer) : ''))
 </script>
 
 <template>
@@ -17,10 +23,19 @@ const html = computed(() => (props.message.role === 'assistant' ? renderMarkdown
     <p class="bubble text">{{ message.content }}</p>
   </article>
   <article v-else class="message assistant">
-    <AppLogo :size="26" class="avatar" />
+    <AppLogo :size="28" class="avatar" />
     <span class="visually-hidden">Graphy:</span>
-    <!-- Sanitized with DOMPurify in renderMarkdown. -->
-    <div class="bubble markdown" v-html="html" />
+    <div class="bubble">
+      <details v-if="split.thinking" class="thinking" :class="{ only: !html }">
+        <summary>
+          <AppIcon name="chevron" :size="14" class="chevron" />
+          {{ t('chat.reasoning') }}
+        </summary>
+        <p class="reasoning">{{ split.thinking }}</p>
+      </details>
+      <!-- Sanitized with DOMPurify in renderMarkdown. -->
+      <div v-if="html" class="markdown" v-html="html" />
+    </div>
   </article>
 </template>
 
@@ -53,7 +68,7 @@ const html = computed(() => (props.message.role === 'assistant' ? renderMarkdown
 }
 
 .assistant .bubble {
-  max-width: calc(100% - 26px - 0.65rem);
+  max-width: calc(100% - 28px - 0.65rem);
   background: var(--bg-subtle);
   border: 1px solid var(--border);
   border-top-left-radius: 4px;
@@ -61,6 +76,60 @@ const html = computed(() => (props.message.role === 'assistant' ? renderMarkdown
 
 .avatar {
   margin-top: 0.3rem;
+}
+
+.thinking {
+  margin: -0.15rem 0 0.6rem;
+}
+
+.thinking.only {
+  margin-bottom: -0.15rem;
+}
+
+.thinking summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.4rem 0.1rem 0.2rem;
+  margin-left: -0.2rem;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  transition:
+    background-color 0.12s,
+    color 0.12s;
+}
+
+.thinking summary::-webkit-details-marker {
+  display: none;
+}
+
+.thinking summary:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.chevron {
+  transform: rotate(-90deg);
+  transition: transform 0.12s;
+}
+
+.thinking[open] .chevron {
+  transform: none;
+}
+
+.reasoning {
+  max-height: 20rem;
+  margin: 0.4rem 0 0;
+  padding: 0.1rem 0 0.1rem 0.75rem;
+  overflow-y: auto;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  white-space: pre-wrap;
 }
 
 .markdown > :deep(:first-child) {

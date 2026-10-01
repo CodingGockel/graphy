@@ -1,4 +1,6 @@
-# Backend Test Questions
+# Test questions (PhenObs KG)
+
+> Specific to the PhenObs knowledge graph (`SWEPLARGE`). For another KG, write a new set.
 
 A curated set of natural-language questions for end-to-end testing of the chat pipeline
 (NL question → SPARQL → NL answer). Every non–edge-case answer below was **verified against the live

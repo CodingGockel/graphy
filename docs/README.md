@@ -1,37 +1,24 @@
 # Documentation
 
-Documentation for **DataExplorer** — a biodiversity question-answering app (natural language →
-SPARQL → GraphDB → answer). Start with the project [README](../README.md) for the high-level
-overview and quick start.
+| Doc | What's in it |
+|-----|--------------|
+| [Setup](./setup.md) | Run database, backend and frontend locally; tests and checks. |
+| [Configuration](./configuration.md) | Every `.env` variable (backend, database, frontend, Docker). |
+| [Architecture](./architecture.md) | How the parts fit together; the agentic tool loop. |
+| [API](./api.md) | HTTP endpoints, schemas, and how a client drives a chat session. |
+| [Frontend](./frontend.md) | Requirements, design rules and structure of the Vue app. |
+| [Knowledge graph](./knowledge-graph.md) | GraphDB, SPARQL, entity resolution, onboarding a new KG. |
+| [Deployment](./deployment.md) | Docker stack, releases, public access via Cloudflare Tunnel. |
+| [Test questions](./test-questions.md) | Verified questions and answers for the PhenObs KG. |
 
-## Contents
+Other folders:
 
-### Understand the system
-- [Architecture](./architecture.md) — components, request flow, the agentic tool loop, persistence,
-  error handling.
-
-### Set it up
-- [Backend setup](./backend_setup.md) — run the FastAPI backend.
-- [Database setup](./database_setup.md) — PostgreSQL via Docker Compose.
-- [Frontend setup](./frontend_setup.md) — run the SvelteKit frontend.
-- [Configuration](./configuration.md) — every `.env` variable (backend + database).
-
-### Ship it
-- [Releasing](./releasing.md) — versioning, building images, deploying the Docker stack, smoke
-  tests, and rollback.
-- [Cloudflare Tunnel](./cloudflare_tunnel.md) — expose the running app on a temporary public
-  `https://` URL for sharing/testing, plus troubleshooting.
-
-### Build against it
-- [API reference](./api_reference.md) — all HTTP endpoints and schemas.
-- [Chat & sessions guide](./frontend_chat_sessions.md) — the client conversation workflow.
-- [GraphDB & SPARQL](./graphdb_sparql.md) — endpoint, Lucene connectors, the ad-hoc query skill.
-
-### Test it
-- [Test questions](./backend_test_questions.md) — sample questions for manual testing.
+- [`plans/`](./plans/): plans for upcoming work, e.g. the [streaming rework](./plans/streaming-rework.md).
+- [`designs/`](./designs/): logo sources (`graphy-icon.svg`, `graphy-wordmark.svg`) and the PNG drafts.
+- [`presentation/`](./presentation/): Slidev slides from the DataExplorer backend talk.
 
 ## Conventions
 
-- Documentation is written in English.
-- Backend/model configuration is **`.env`-only and read-only at runtime** — there is no settings
-  API.
+- Docs are written in English (plans may be in German).
+- Backend configuration is `.env`-only and read-only at runtime. There is no settings API.
+- When code changes behavior, update the matching doc in the same change.
