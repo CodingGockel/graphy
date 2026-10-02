@@ -98,7 +98,8 @@ How a client should use it:
    off it always is, and then it is already part of the `session` event. A title set with
    `PATCH /sessions/{id}` is never overwritten.
 9. **Reasoning:** the model's reasoning arrives as `thinking` events: during the tool loop
-   (unless `LLM_STREAM_TOOL_LOOP` is off; then in one piece per call) and before the answer. It is
+   (unless `LLM_STREAM_TOOL_LOOP` is off; then in one piece per call) and before the answer. One
+   reply of the model may start several steps; its reasoning comes before the first of them. It is
    stored with the step it led to (`steps[].thinking`) or, for the reasoning before the answer,
    with the message (`thinking`), unless `PERSIST_THINKING` is off. One case cannot be detected
    while streaming: a model whose output only *ends* its reasoning with a lone `</think>`. That
@@ -171,7 +172,7 @@ Deletes the session with its messages and steps. `204`, or `404` if unknown.
 ```
 
 The stored result of one step; `404` if the step doesn't exist. `kind` decides the shape:
-standard SPARQL JSON for `sparql_query`, a list of `{ uri, label, score }` for `resolve_entity`,
+standard SPARQL JSON for `sparql_query`, a list of `{ uri, label, score }` for `resolve_entity` (`label` holds all labels of the entity, joined with ` | `),
 `null` for every other kind and for a failed step. A `previous_results` step has no result of its
 own; its `args.source_step_id` names the step that holds the data.
 

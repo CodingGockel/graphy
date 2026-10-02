@@ -34,7 +34,7 @@ cd database && cp .env.example .env && docker compose up -d
 
 # 2. Backend  → http://localhost:8000 (API docs at /docs)
 cd ../backend
-python -m venv .swep-venv && source .swep-venv/bin/activate
+python -m venv ../.swep-venv && source ../.swep-venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env            # fill in BLABLADOR_API_KEY
 uvicorn src.main:app --reload

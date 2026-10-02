@@ -1,6 +1,11 @@
 import pytest
 
-from src.util.think_splitter import ThinkSplitter, split_think
+from src.util.think_splitter import (
+    ReasoningOnlySplitter,
+    ThinkSplitter,
+    reasoning_only,
+    split_think,
+)
 
 
 def _split(deltas: list[str]) -> tuple[str, str]:
@@ -88,3 +93,38 @@ class TestSplitThink:
 
     def test_empty_block_is_no_thinking(self):
         assert split_think("<think>  </think>answer") == (None, "answer")
+
+
+def _reasoning(deltas: list[str]) -> str:
+    splitter = ReasoningOnlySplitter()
+    parts = [part for delta in deltas for part in splitter.feed(delta)] + splitter.flush()
+    assert all(kind == "thinking" for kind, _ in parts)
+    return "".join(text for _, text in parts)
+
+
+class TestReasoningOnlySplitter:
+    def test_all_text_is_thinking_and_the_tags_are_removed(self):
+        assert _reasoning(["<think>let me see", "</think>and then"]) == "let me seeand then"
+
+    def test_unclosed_block(self):
+        assert _reasoning(["<think>let me see\n\nI will look it up."]) == (
+            "let me see\n\nI will look it up."
+        )
+
+    @pytest.mark.parametrize("cut", range(1, len("<think>why</think>more<tool_call>{}")))
+    def test_tags_and_marker_split_at_every_position(self, cut):
+        text = "<think>why</think>more<tool_call>{}"
+        assert _reasoning([text[:cut], text[cut:]]) == "whymore"
+
+    @pytest.mark.parametrize(
+        "marker", ["<minimax:tool_call>", "<tool_call>", '<invoke name="finish">']
+    )
+    def test_text_ends_at_a_tool_call_marker(self, marker):
+        assert _reasoning(["why ", marker, "\n{...}", " more"]) == "why "
+
+    def test_a_lone_angle_bracket_is_kept(self):
+        assert _reasoning(["a < b and x <", " y"]) == "a < b and x < y"
+        assert _reasoning(["ends with <"]) == "ends with <"
+
+    def test_complete_text(self):
+        assert reasoning_only("<think>why\n</think>\n<minimax:tool_call>\n") == "why"

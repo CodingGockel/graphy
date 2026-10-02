@@ -56,9 +56,32 @@ class TestChatWithTools:
         turn = await _turn(service)
 
         assert turn.answer is None
-        assert turn.tool_call is not None
-        assert turn.tool_call.name == "execute_sparql_query"
-        assert turn.tool_call.arguments == {"query": "SELECT ?s {}"}
+        [call] = turn.tool_calls
+        assert call.name == "execute_sparql_query"
+        assert call.arguments == {"query": "SELECT ?s {}"}
+
+    async def test_several_tool_calls_are_all_returned(self, settings_stub):
+        calls = [
+            make_tool_call("resolve_entity", '{"term": "Vienna"}', "call_1"),
+            make_tool_call("resolve_entity", '{"term": "Jena"}', "call_2"),
+        ]
+        completion = make_completion(make_message(tool_calls=calls))
+        service, _ = _make_service(settings_stub, create=AsyncMock(return_value=completion))
+
+        turn = await _turn(service)
+
+        assert [(c.tool_call_id, c.arguments["term"]) for c in turn.tool_calls] == [
+            ("call_1", "Vienna"), ("call_2", "Jena"),
+        ]
+
+    @pytest.mark.parametrize("arguments", ["", "{}", "null"])
+    async def test_tool_call_without_arguments(self, settings_stub, arguments):
+        completion = make_completion(make_message(tool_calls=[make_tool_call("finish", arguments)]))
+        service, _ = _make_service(settings_stub, create=AsyncMock(return_value=completion))
+
+        [call] = (await _turn(service)).tool_calls
+
+        assert (call.name, call.arguments) == ("finish", {})
 
     async def test_invalid_tool_arguments_raise(self, settings_stub):
         tc = make_tool_call("execute_sparql_query", "not-json")
@@ -77,9 +100,9 @@ class TestChatWithTools:
 
         turn = await _turn(service)
 
-        assert turn.tool_call is not None
-        assert turn.tool_call.name == "resolve_entity"
-        assert turn.tool_call.arguments == {"term": "rose"}
+        [call] = turn.tool_calls
+        assert call.name == "resolve_entity"
+        assert call.arguments == {"term": "rose"}
 
     async def test_recovers_tool_call_from_json_content(self, settings_stub):
         content = '{"name": "ask_clarification", "arguments": {"question": "which?"}}'
@@ -88,8 +111,8 @@ class TestChatWithTools:
 
         turn = await _turn(service)
 
-        assert turn.tool_call.name == "ask_clarification"
-        assert turn.tool_call.arguments == {"question": "which?"}
+        assert turn.tool_calls[0].name == "ask_clarification"
+        assert turn.tool_calls[0].arguments == {"question": "which?"}
 
     async def test_plain_text_answer(self, settings_stub):
         completion = make_completion(make_message(content="Here is the answer.", tool_calls=None))
@@ -97,8 +120,18 @@ class TestChatWithTools:
 
         turn = await _turn(service)
 
-        assert turn.tool_call is None
+        assert turn.tool_calls == []
         assert turn.answer == "Here is the answer."
+
+    async def test_tool_choice_comes_from_the_settings(self, settings_stub):
+        completion = make_completion(make_message(tool_calls=[make_tool_call("finish", "{}")]))
+        for choice in ("auto", "required"):
+            settings_stub.llm_tool_choice = choice
+            service, client = _make_service(
+                settings_stub, create=AsyncMock(return_value=completion)
+            )
+            await _turn(service)
+            assert client.chat.completions.create.await_args.kwargs["tool_choice"] == choice
 
     async def test_empty_response_raises_no_content(self, settings_stub):
         completion = make_completion(make_message(content=None, tool_calls=None))
@@ -136,6 +169,22 @@ class TestChatWithToolsNotStreamed:
         assert deltas == ["why"]
         assert turn.answer == "The answer."
 
+    async def test_required_all_text_next_to_a_tool_call_is_reasoning(self, settings_stub):
+        settings_stub.llm_tool_choice = "required"
+        # The closing tag is missing in front of a tool call.
+        message = make_message(
+            content="<think>I need a query.\n\nLet me look it up.",
+            tool_calls=[make_tool_call("execute_sparql_query", '{"query": "ASK {}"}')],
+        )
+        service, _ = _make_service(
+            settings_stub, create=AsyncMock(return_value=make_completion(message))
+        )
+
+        deltas, turn = await _loop_call(service)
+
+        assert deltas == ["I need a query.\n\nLet me look it up."]
+        assert turn.tool_calls[0].arguments == {"query": "ASK {}"}
+
 
 class TestChatWithToolsStreamed:
     async def test_tool_call_split_over_many_deltas(self, settings_stub):
@@ -152,16 +201,16 @@ class TestChatWithToolsStreamed:
         deltas, turn = await _loop_call(service)
 
         assert deltas == []
-        assert turn.tool_call is not None
-        assert turn.tool_call.tool_call_id == "call_1"
-        assert turn.tool_call.name == "execute_sparql_query"
-        assert turn.tool_call.arguments == {"query": "SELECT ?s {}"}
+        [call] = turn.tool_calls
+        assert call.tool_call_id == "call_1"
+        assert call.name == "execute_sparql_query"
+        assert call.arguments == {"query": "SELECT ?s {}"}
         # the rebuilt message carries the call, for the transcript of the next iteration
         assert turn.raw_message.tool_calls[0].function.arguments == '{"query": "SELECT ?s {}"}'
         assert client.chat.completions.create.await_args.kwargs["stream"] is True
         assert stream.closed
 
-    async def test_first_of_two_tool_calls_wins(self, settings_stub):
+    async def test_two_tool_calls_are_rebuilt_in_their_order(self, settings_stub):
         service, _, _ = _streaming(
             settings_stub,
             [
@@ -174,9 +223,29 @@ class TestChatWithToolsStreamed:
 
         turn = await _turn(service)
 
-        assert turn.tool_call.name == "resolve_entity"
-        assert turn.tool_call.arguments == {"term": "rose"}
+        first, second = turn.tool_calls
+        assert (first.name, first.arguments) == ("resolve_entity", {"term": "rose"})
+        assert (second.name, second.arguments) == ("ask_clarification", {"question": "?"})
         assert len(turn.raw_message.tool_calls) == 2
+
+    async def test_required_streams_all_text_as_reasoning(self, settings_stub):
+        settings_stub.llm_tool_choice = "required"
+        service, _, _ = _streaming(
+            settings_stub,
+            [
+                make_chunk(content="<think>Just a greeting.\n"),
+                make_chunk(content="\nNo data needed.\n\n<minimax:"),
+                make_chunk(content="tool_call>\n"),
+                make_chunk(tool_calls=[make_tool_call_delta(0, "call_1", "finish", "{}")]),
+                make_chunk(finish_reason="tool_calls"),
+            ],
+        )
+
+        deltas, turn = await _loop_call(service)
+
+        # no tags, no tool-call marker, nothing held back for an answer
+        assert "".join(deltas) == "Just a greeting.\n\nNo data needed.\n\n"
+        assert [c.name for c in turn.tool_calls] == ["finish"]
 
     async def test_text_encoded_tool_call_is_recovered_from_the_buffer(self, settings_stub):
         service, _, _ = _streaming(
@@ -192,8 +261,8 @@ class TestChatWithToolsStreamed:
 
         # Nothing but reasoning is passed on live.
         assert deltas == []
-        assert turn.tool_call.name == "resolve_entity"
-        assert turn.tool_call.arguments == {"term": "rose"}
+        assert turn.tool_calls[0].name == "resolve_entity"
+        assert turn.tool_calls[0].arguments == {"term": "rose"}
 
     async def test_thinking_is_passed_on_while_the_tool_call_is_still_detected(
         self, settings_stub
@@ -212,7 +281,7 @@ class TestChatWithToolsStreamed:
         deltas, turn = await _loop_call(service)
 
         assert deltas == ["I need ", "a query."]
-        assert turn.tool_call.arguments == {"query": "ASK {}"}
+        assert turn.tool_calls[0].arguments == {"query": "ASK {}"}
 
     async def test_plain_answer_is_buffered_and_its_reasoning_split_off(self, settings_stub):
         service, _, _ = _streaming(
@@ -223,7 +292,7 @@ class TestChatWithToolsStreamed:
         deltas, turn = await _loop_call(service)
 
         assert deltas == ["easy"]
-        assert turn.tool_call is None
+        assert turn.tool_calls == []
         assert turn.answer == "Hello."
 
     async def test_reasoning_content_field_is_thinking(self, settings_stub):
@@ -311,7 +380,12 @@ class TestGenerateAnswerStream:
         mocker.patch("src.services.llm_service.load_prompt", return_value="ANSWER PROMPT")
         stream = FakeStream(chunks, error)
         service, client = _make_service(settings_stub, create=AsyncMock(return_value=stream))
-        parts = [p async for p in service.generate_answer_stream("q?", "SELECT ?s {}", "{}")]
+        parts = [
+            p
+            async for p in service.generate_answer_stream(
+                "q?", "SPARQL query 1:\nSELECT ?s {}", [{"role": "user", "content": "earlier"}]
+            )
+        ]
         return parts, client
 
     async def test_answer_is_streamed_with_its_reasoning_split_off(self, settings_stub, mocker):
@@ -329,6 +403,12 @@ class TestGenerateAnswerStream:
         kwargs = client.chat.completions.create.await_args.kwargs
         assert kwargs["stream"] is True
         assert "tools" not in kwargs
+        # system prompt, the chat so far, then the question with the turn's data
+        assert kwargs["messages"] == [
+            {"role": "system", "content": "ANSWER PROMPT"},
+            {"role": "user", "content": "earlier"},
+            {"role": "user", "content": "User question: q?\n\nSPARQL query 1:\nSELECT ?s {}"},
+        ]
 
     async def test_reasoning_content_field_is_thinking(self, settings_stub, mocker):
         parts, _ = await self._answer(
@@ -352,7 +432,7 @@ class TestGenerateAnswerStream:
             settings_stub, create=AsyncMock(side_effect=RuntimeError("api down"))
         )
         with pytest.raises(LLMServiceException):
-            [p async for p in service.generate_answer_stream("q?", "SELECT ?s {}", None)]
+            [p async for p in service.generate_answer_stream("q?", "(no query executed)")]
 
     async def test_error_in_the_middle_of_the_stream_raises(self, settings_stub, mocker):
         with pytest.raises(LLMServiceException):

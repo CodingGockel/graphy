@@ -92,8 +92,10 @@ The route (`api/v1/chat.py`) forwards these events as Server-Sent Events
 
 ## The tool loop
 
-The LLM picks one tool per iteration, at most `CHAT_MAX_TOOL_ITERATIONS` times. Tool definitions are
-JSON files in `backend/src/resources/llm_tools/`.
+The LLM is called at most `CHAT_MAX_TOOL_ITERATIONS` times. Each reply is one or several tool calls
+(e.g. one `resolve_entity` per name the user mentioned); they are executed in order. With
+`LLM_TOOL_CHOICE=required` (the default) a reply is always a tool call. Tool definitions are JSON
+files in `backend/src/resources/llm_tools/`.
 
 | Tool | What it does |
 |------|--------------|
@@ -101,19 +103,36 @@ JSON files in `backend/src/resources/llm_tools/`.
 | `execute_sparql_query` | Runs a SPARQL query and feeds the results back. |
 | `use_previous_results` | Reuses the results of an earlier turn (`reference_turn`) instead of querying again. |
 | `ask_clarification` | Returns a question to the user and ends the loop. |
+| `finish` | Ends the loop: enough data is collected, or the message needs none (a greeting). |
 
 Each tool call becomes a step of the kind `resolve_entity`, `sparql_query`, `previous_results`
-or `clarification`. A call to a tool that doesn't exist is treated as a clarification.
+or `clarification`; `finish` is not a step. A call to a tool that doesn't exist is treated as a
+clarification.
+
+The prompt tells the model to **resolve first**: every name the user mentions goes through
+`resolve_entity`, and the query then uses the returned URI instead of matching a label as text
+(labels may be in another language than the question).
+
+**Context:** within a turn everything shares one context. The loop transcript grows with every
+tool call and its result (a large result is cut to a sample there). The answer call gets the
+earlier questions and answers of the chat, the question, the resolved entities and **every**
+successful query of the turn with its result (the last result in full, earlier ones as the same
+sample). Across turns only question and answer are kept as history, plus the list of turns whose
+data `use_previous_results` can reuse.
 
 **How the loop ends:**
 
-- **The LLM stops calling tools.** If it ran queries, a separate `generate_answer_stream()` call
-  writes the final answer from the collected data, using the answer prompt; it is streamed token by
-  token. If it never queried, its own text is the answer, sent in one piece.
+- **The LLM calls `finish`.** A separate `generate_answer_stream()` call writes the final answer
+  from the collected data, using the answer prompt; it is streamed token by token. This is also
+  how a message without data (a greeting) is answered. Other tool calls in the same reply are
+  still executed.
+- **The LLM writes text instead of a tool call** (`LLM_TOOL_CHOICE=auto`, or a server that ignores
+  `required`). If it ran queries, the answer call writes the answer as above. If it never queried,
+  its own text is the answer, sent in one piece.
 - **The iteration limit is reached.** `generate_answer_stream()` forces an answer from whatever
   data exists.
 - **The LLM calls `ask_clarification`.** Its question is returned as the normal `answer`; there is
-  no separate flag.
+  no separate flag. Tool calls after it in the same reply are not executed.
 - **`use_previous_results` finds no data.** The step fails and a fixed text is the answer.
 
 **Errors inside the loop:**
@@ -134,14 +153,17 @@ or `clarification`. A call to a tool that doesn't exist is treated as a clarific
 - **Tool loop:** `LLMService.chat_with_tools()` is an async generator. It requests a stream, passes
   on only the reasoning while it is written (`util/think_splitter.py` routes the deltas and holds
   back a tag that is split across two of them) and buffers everything else: text may turn out to
-  be a text-encoded tool call or the final answer. At the end the complete message is rebuilt
+  be a text-encoded tool call or the final answer. With `LLM_TOOL_CHOICE=required` all text of a
+  loop call is reasoning (`ReasoningOnlySplitter`: tags removed, cut at a tool-call marker), since
+  it cannot be an answer. At the end the complete message is rebuilt
   (tool-call fragments are joined by index) and the tool detection runs on it exactly as it would
   on a non-streamed response. Its last item is the `LLMTurn`. `LLM_STREAM_TOOL_LOOP=false` makes
   the loop calls plain requests, for servers that parse tool calls less reliably when streaming.
 - **Answer:** `generate_answer_stream()` yields `(kind, delta)` with the kind `thinking` or
   `answer`; no tool parsing is involved.
 - **Storing reasoning:** the reasoning before a tool call is stored with that step
-  (`steps.thinking`); the reasoning after the last step (the loop's last call plus the answer
+  (`steps.thinking`; with several calls in one reply, with the first); the reasoning after the
+  last step (the loop's last call plus the answer
   call) with the message (`messages.thinking`). `PERSIST_THINKING=false` skips both; the events are
   still sent. Reasoning that only ends with a lone `</think>` cannot be recognized while streaming;
   `split_think()` separates it on the complete text before the message is stored.
@@ -152,11 +174,12 @@ or `clarification`. A call to a tool that doesn't exist is treated as a clarific
 
 - **Tool calls as plain text:** some models send tool calls as text (XML, JSON, fenced). `LLMService`
   recovers these.
-- **Dropped `</think>`:** Blablador (MiniMax) drops the closing tag when a request with tools is
-  streamed. An answer written without tools then sits inside a block that never ends. `LLMService`
-  takes the text after the blank-line gap the tag leaves behind as the answer, so the turn does not
-  fail, but the live reasoning then contains the answer text too. Set `LLM_STREAM_TOOL_LOOP=false`
-  for this server.
+- **Dropped `</think>`:** Blablador (MiniMax) drops the closing tag in front of a tool call
+  (streamed or not) and whenever a request with tools is streamed. The tags then cannot separate
+  reasoning from text the model writes to the user. `LLM_TOOL_CHOICE=required` avoids the question:
+  the model writes no such text. With `auto`, an answer written without tools sits inside a block
+  that never ends; `LLMService` takes the text after the blank-line gap the tag leaves behind as
+  the answer, so the turn does not fail, but the live reasoning then contains the answer text too.
 - **Reasoning:** `<think>…</think>` blocks (and a separate `reasoning_content` field, if the server
   uses one) are separated from the output and sent as `thinking` events; see Streaming above.
 

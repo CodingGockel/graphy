@@ -56,8 +56,10 @@ Phenophase statement-unit types (one instance per species·garden·year):
 
 The **garden** node reached by `obo:BFO_occursIn` is a `semunit:geoIndexStatementUnit` whose
 `rdfs:label` reads e.g. `"Botanischer Garten Jena located in city Jena has lat 50.9311 and long
-11.5861"` and whose `semunit:hasSemanticUnitSubject` is the Wikidata garden URI. Filter a garden by
-`FILTER(CONTAINS(?gardenLabel, "Jena"))` on that label.
+11.5861"` and whose `semunit:hasSemanticUnitSubject` is the Wikidata garden URI. To restrict a query to
+a garden, use the garden's URI on the occurrence (`?occ obo:RO_locatedIn <garden URI>`, see "Entity
+resolution" below) — not this label: it is in a different language per garden ("Botanischer Garten
+Jena", "Botanical Garden of the University of Vienna").
 
 ## Verified query patterns
 
@@ -79,6 +81,27 @@ SELECT ?occ ?gardenLabel ?dayOfYear WHERE {
   FILTER(?year = 2024)
 } LIMIT 200
 ```
+
+**Compare gardens: observed plants per garden in a year** (garden URIs from `resolve_entity`; one
+query for all gardens, not one per garden):
+```sparql
+PREFIX semunit: <http://example.com/semunit/>
+PREFIX time: <http://www.w3.org/2006/time#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX obo: <http://purl.obolibrary.org/obo/>
+PREFIX dwc: <http://rs.tdwg.org/dwc/terms/>
+SELECT ?gardenLabel (COUNT(DISTINCT ?occ) AS ?count) WHERE {
+  VALUES ?garden { <https://www.wikidata.org/entity/Q317714> <https://www.wikidata.org/entity/Q677602> }
+  ?occ a dwc:Occurrence ; obo:RO_locatedIn ?garden .
+  ?garden rdfs:label ?gardenLabel .
+  ?u semunit:hasSemanticUnitSubject ?occ ;
+     time:hasTime/time:inDateTime ?dtd .
+  ?dtd time:year ?year .
+  FILTER(?year = 2020)
+} GROUP BY ?gardenLabel
+```
+With **city** URIs instead, go through the garden: `VALUES ?city { <…> }` and
+`?garden obo:RO_locatedIn ?city ; rdfs:label ?gardenLabel .` — the rest stays the same.
 
 **Top-N species by earliest average first-flower day** (aggregate, no LIMIT trap):
 ```sparql
@@ -127,15 +150,45 @@ SELECT ?occ ?species WHERE {
 
 ## Entity resolution on this graph
 
-- **Species:** if the user gives a scientific name, match it directly on `?occ rdfs:label "<Latin>"`
-  (occurrence labels are exact Latin names). If they give a **common name** (German/English) or a
-  possibly-misspelled name, call `resolve_entity` with `type` `dwc:Taxon`, then join occurrences via
-  `?occ dcterms:identifier ?taxon`. `resolve_entity` indexes `dwc:Organism`, `dwc:Taxon`,
-  `schema:City`, `obo:ENVO_BotanicalGarden`.
-- **Gardens / cities:** there are only 15. Filter via the `geoIndexStatementUnit` label
-  (`CONTAINS(?gardenLabel, "Jena")`) or `resolve_entity` with `type` `schema:City` /
-  `obo:ENVO_BotanicalGarden`.
-- Do not `resolve_entity` for a plain scientific name that can match an occurrence label directly.
+`resolve_entity` indexes `dwc:Taxon`, `dwc:Organism`, `schema:City` and `obo:ENVO_BotanicalGarden`.
+Resolve **every** species, garden and city the user names, then use the returned URI **exactly as
+returned** (city URIs start with `http://www.wikidata.org/…`, garden URIs with
+`https://www.wikidata.org/…` — do not "fix" one into the other).
+
+- **Species** — scientific or common name, any spelling: `resolve_entity` with `type` `dwc:Taxon` (a
+  taxon carries the Latin name and the German/English common names; without the `type` the result is
+  filled with one `dwc:Organism` per garden). Then select its occurrences with
+  `?occ dcterms:identifier <taxon URI>`.
+- **Garden:** `resolve_entity` with `type` `obo:ENVO_BotanicalGarden`, then
+  `?occ obo:RO_locatedIn <garden URI>`.
+- **City:** `resolve_entity` with `type` `schema:City`, then
+  `?garden obo:RO_locatedIn <city URI> . ?occ obo:RO_locatedIn ?garden .` City labels are **English**
+  ("Vienna", "Prague"; German cities as "Jena", "Halle (Saale)"): pass the English name ("Wien" →
+  "Vienna"). When the user names a place without saying garden or city ("in Jena"), resolve it as a
+  city.
+- **Fallback** — only if a name could not be resolved: match the species on the occurrence
+  (`?occ rdfs:label "<Latin name>"`, occurrence labels are exact Latin names) or the place on the
+  `geoIndexStatementUnit` label (`FILTER(CONTAINS(?gardenLabel, "Jena"))`).
+
+The statement-unit patterns above stay as they are; only the way the species and the place are
+selected changes — e.g. first-flower day of a resolved species in a resolved garden:
+```sparql
+PREFIX semunit: <http://example.com/semunit/>
+PREFIX time: <http://www.w3.org/2006/time#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX obo: <http://purl.obolibrary.org/obo/>
+PREFIX dcterms: <http://purl.org/dc/terms/>
+SELECT ?species ?dayOfYear WHERE {
+  ?occ dcterms:identifier <https://www.gbif.org/species/5299536> ;
+       obo:RO_locatedIn <https://www.wikidata.org/entity/Q317714> ;
+       rdfs:label ?species .
+  ?u a semunit:firstFlowerStatementUnit ;
+     semunit:hasSemanticUnitSubject ?occ ;
+     time:hasTime/time:inDateTime ?dtd .
+  ?dtd time:dayOfYear ?dayOfYear ; time:year ?year .
+  FILTER(?year = 2023)
+} LIMIT 200
+```
 
 ## KG-specific clarification cases
 

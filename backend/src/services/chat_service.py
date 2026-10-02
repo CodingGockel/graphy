@@ -3,7 +3,7 @@ import json
 import time
 import uuid
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from src.models.events import (
@@ -37,6 +37,8 @@ from src.util.llm_utils import load_tools
 from src.util.think_splitter import split_think
 
 TOOLS: list[dict[str, Any]] = load_tools()
+# The tool that ends the loop. It is not a step: nothing is executed or stored for it.
+FINISH_TOOL = "finish"
 
 @dataclass
 class TurnData:
@@ -98,12 +100,29 @@ class StepOutcome:
     final_answer: str | None = None
 
 
-def _truncate_results(raw: str, max_rows: int = 30) -> str:
+@dataclass
+class GatheredData:
+    """What the steps of a turn found, in the order they ran: the input of the final
+    answer call. Failed steps leave nothing here."""
+    # (term, candidates) of every resolve_entity step that found something.
+    entities: list[tuple[str, list[dict]]] = field(default_factory=list)
+    # (query, results) of every successful query, new or reused.
+    queries: list[tuple[str, str]] = field(default_factory=list)
+
+
+LOOP_TRUNCATION_NOTE = (
+    "[Truncated for the tool loop: showing {shown} of {total} rows. "
+    "The full result set is used to write the final answer.]"
+)
+ANSWER_TRUNCATION_NOTE = "[Earlier result, shortened: showing {shown} of {total} rows.]"
+
+
+def _truncate_results(raw: str, max_rows: int = 30, note: str = LOOP_TRUNCATION_NOTE) -> str:
     """Shrink a SPARQL JSON result before re-injecting it into the tool loop: keep the
     first `max_rows` bindings and note the true total. The loop only needs a representative
     sample to decide its next step; the *full* result still goes to the final-answer call
-    (last_results), so nothing is lost. Prevents the monotonic context growth that caused
-    413s / max-iteration spirals on large result sets."""
+    (as the turn's last result), so nothing is lost. Prevents the monotonic context growth
+    that caused 413s / max-iteration spirals on large result sets."""
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
@@ -113,11 +132,29 @@ def _truncate_results(raw: str, max_rows: int = 30) -> str:
         return raw
     total = len(bindings)
     data["results"]["bindings"] = bindings[:max_rows]
-    return (
-        json.dumps(data)
-        + f"\n\n[Truncated for the tool loop: showing {max_rows} of {total} rows. "
-        "The full result set is used to write the final answer.]"
-    )
+    return json.dumps(data) + "\n\n" + note.format(shown=max_rows, total=total)
+
+
+def _answer_data(gathered: GatheredData) -> str:
+    """Render what a turn gathered as the data of the final answer call: the resolved
+    entities and every query with its result. The last result (what the loop ended
+    on) is given in full, earlier ones shortened like in the loop."""
+    if not gathered.queries:
+        parts = ["(no query executed)"]
+    else:
+        parts = []
+        last = len(gathered.queries)
+        for number, (query, results) in enumerate(gathered.queries, start=1):
+            if number < last:
+                results = _truncate_results(results, note=ANSWER_TRUNCATION_NOTE)
+            parts.append(f"SPARQL query {number}:\n{query}\n\nResult of query {number}:\n{results}")
+    if gathered.entities:
+        lines = ["Resolved entities (name the user gave: what it matched in the graph):"]
+        for term, candidates in gathered.entities:
+            matches = "; ".join(f"\"{c['label']}\" <{c['uri']}>" for c in candidates)
+            lines.append(f"- '{term}': {matches}")
+        parts.insert(0, "\n".join(lines))
+    return "\n\n".join(parts)
 
 
 def _format_candidates(term: str, candidates: list[dict]) -> str:
@@ -269,14 +306,14 @@ class ChatService:
             {"role": "user", "content": message},
         ]
 
-        # 5. Agentic loop: the model may run several queries (and inspect their
-        #    results) before producing a final answer. Track the most recent
-        #    query/results: the final answer is written from them.
-        last_query = ""
-        last_results: str | None = None
+        # 5. Agentic loop: the model may resolve names and run several queries (and
+        #    inspect their results) before it ends the loop. Everything the steps find
+        #    is collected: the final answer is written from all of it.
+        gathered = GatheredData()
         row_count: int | None = None
         answer: str | None = None
         ordinal = 0
+        finished = False
 
         for iteration in range(self.settings.chat_max_tool_iterations):
             # Between iterations: the title, as soon as it is there. Stored through
@@ -298,71 +335,84 @@ class ChatService:
                     yield ThinkingEvent(delta=item)
             assert turn is not None
 
-            # Model stopped calling tools → data gathering is done. Produce the
-            # final answer with the dedicated answer prompt rather than using the
-            # model's loop text. If no data was ever gathered, fall back to that
-            # loop text (the model answered without needing a query).
-            if turn.tool_call is None:
-                if last_results is None:
+            # Plain text instead of a tool call (`llm_tool_choice` = `auto`, or a server
+            # that ignores `required`) also ends the loop. With data, the answer is
+            # still written by the answer call; without, this text is the answer.
+            if not turn.tool_calls:
+                if not gathered.queries:
                     answer = turn.answer or ""
                 break
 
-            tc = turn.tool_call
-            logger.info(f"Iteration {iteration + 1}: LLM chose tool '{tc.name}'")
+            # A message may hold several tool calls (e.g. one resolve_entity per
+            # name): each becomes a step of its own, executed in order.
+            outputs: list[tuple[ToolCallResult, str]] = []
+            for tc in turn.tool_calls:
+                logger.info(f"Iteration {iteration + 1}: LLM chose tool '{tc.name}'")
+                if tc.name == FINISH_TOOL:
+                    # The loop ends once the other calls of this message have run.
+                    finished = True
+                    continue
 
-            ordinal += 1
-            kind, args = self._plan_step(tc, turn_map)
-            # The reasoning so far led to this tool call: it is stored with the step.
-            step_id = await repo.start_step(
-                message_id,
-                ordinal=ordinal,
-                kind=kind,
-                args=args,
-                thinking=state.thinking.strip() or None,
-            )
-            state.thinking = ""
-            yield StepStartedEvent(step_id=step_id, ordinal=ordinal, kind=kind, args=args)
-
-            started = time.monotonic()
-            try:
-                outcome = await self._execute_step(kind, args, turn_map, repo)
-            except Exception as e:
-                # Infrastructure failure: close the step, then abort the turn.
-                duration_ms = int((time.monotonic() - started) * 1000)
-                error = _step_error(e)
-                await self._close_failed_step(repo, step_id, error, duration_ms)
-                yield StepFinishedEvent(
-                    step_id=step_id, ok=False, error=error, duration_ms=duration_ms
+                ordinal += 1
+                kind, args = self._plan_step(tc, turn_map)
+                # The reasoning so far led to this tool call: it is stored with the step.
+                step_id = await repo.start_step(
+                    message_id,
+                    ordinal=ordinal,
+                    kind=kind,
+                    args=args,
+                    thinking=state.thinking.strip() or None,
                 )
-                raise
-            duration_ms = int((time.monotonic() - started) * 1000)
-            await repo.finish_step(
-                step_id,
-                ok=outcome.ok,
-                count=outcome.count,
-                result=outcome.result,
-                error=outcome.error,
-                duration_ms=duration_ms,
-            )
-            yield StepFinishedEvent(
-                step_id=step_id,
-                ok=outcome.ok,
-                count=outcome.count,
-                error=outcome.error,
-                duration_ms=duration_ms,
-            )
+                state.thinking = ""
+                yield StepStartedEvent(step_id=step_id, ordinal=ordinal, kind=kind, args=args)
 
-            if outcome.final_answer is not None:
-                # Clarification, or nothing to reuse: the fixed text is the answer
-                # and no data is attached to it.
-                answer, row_count = outcome.final_answer, None
+                started = time.monotonic()
+                try:
+                    outcome = await self._execute_step(kind, args, turn_map, repo)
+                except Exception as e:
+                    # Infrastructure failure: close the step, then abort the turn.
+                    duration_ms = int((time.monotonic() - started) * 1000)
+                    error = _step_error(e)
+                    await self._close_failed_step(repo, step_id, error, duration_ms)
+                    yield StepFinishedEvent(
+                        step_id=step_id, ok=False, error=error, duration_ms=duration_ms
+                    )
+                    raise
+                duration_ms = int((time.monotonic() - started) * 1000)
+                await repo.finish_step(
+                    step_id,
+                    ok=outcome.ok,
+                    count=outcome.count,
+                    result=outcome.result,
+                    error=outcome.error,
+                    duration_ms=duration_ms,
+                )
+                yield StepFinishedEvent(
+                    step_id=step_id,
+                    ok=outcome.ok,
+                    count=outcome.count,
+                    error=outcome.error,
+                    duration_ms=duration_ms,
+                )
+
+                if outcome.final_answer is not None:
+                    # Clarification, or nothing to reuse: the fixed text is the answer
+                    # and no data is attached to it. The turn ends right here.
+                    answer, row_count = outcome.final_answer, None
+                    finished = True
+                    break
+                if outcome.results is not None:
+                    # Keep the full results for the final answer; only a truncated
+                    # sample goes back into the loop transcript.
+                    gathered.queries.append((outcome.query or "", outcome.results))
+                    row_count = outcome.count
+                elif kind == "resolve_entity" and outcome.ok and outcome.result:
+                    gathered.entities.append((args["term"], outcome.result))
+                outputs.append((tc, outcome.output))
+
+            if finished:
                 break
-            if outcome.results is not None:
-                # Keep the full results for the final answer; only a truncated
-                # sample went back into the loop transcript.
-                last_query = outcome.query or last_query
-                last_results, row_count = outcome.results, outcome.count
-            self._append_tool_exchange(messages, tc, outcome.output)
+            self._append_tool_exchange(messages, turn, outputs)
         else:
             # Loop exhausted without a final answer — force one via the answer prompt
             # using whatever data was gathered so far.
@@ -376,10 +426,10 @@ class ChatService:
             if state.thinking:
                 # The answer call's reasoning follows that of the loop's last call.
                 state.thinking = state.thinking.rstrip() + "\n\n"
-            async for kind, delta in self.llm.generate_answer_stream(
-                message, last_query, last_results
+            async for part, delta in self.llm.generate_answer_stream(
+                message, _answer_data(gathered), history
             ):
-                if kind == "thinking":
+                if part == "thinking":
                     self._keep_thinking(state, delta)
                     yield ThinkingEvent(delta=delta)
                 else:
@@ -603,32 +653,39 @@ class ChatService:
         return StepOutcome(ok=True, final_answer=args["question"])
 
     def _append_tool_exchange(
-        self, messages: list[dict[str, Any]], tc: ToolCallResult, output: str
+        self,
+        messages: list[dict[str, Any]],
+        turn: LLMTurn,
+        outputs: list[tuple[ToolCallResult, str]],
     ) -> None:
-        """Append the assistant tool call + its result to the running transcript
-        so the model can decide its next step."""
-        if tc.tool_call_id:
-            # Proper structured round-trip: assistant tool_calls msg + tool reply.
-            # Restrict the dumped message to the single tool_call we're answering:
-            # a model may emit several in one message, but we only reply to one, and
-            # OpenAI requires every tool_call to have a matching tool response.
-            msg_dict = tc.raw_message.model_dump()
+        """Append the assistant message with its tool calls + their results to the
+        running transcript so the model can decide its next step."""
+        if all(tc.tool_call_id for tc, _ in outputs):
+            # Proper structured round-trip: assistant tool_calls msg + one tool reply
+            # per call. Restrict the dumped message to the calls that are answered
+            # (`finish` is not): OpenAI requires every tool_call to have a matching
+            # tool response.
+            answered = {tc.tool_call_id for tc, _ in outputs}
+            msg_dict = turn.raw_message.model_dump()
             if msg_dict.get("tool_calls"):
                 msg_dict["tool_calls"] = [
-                    c for c in msg_dict["tool_calls"] if c.get("id") == tc.tool_call_id
+                    c for c in msg_dict["tool_calls"] if c.get("id") in answered
                 ]
             messages.append(msg_dict)
-            messages.append(
-                {"role": "tool", "tool_call_id": tc.tool_call_id, "content": output}
-            )
+            for tc, output in outputs:
+                messages.append(
+                    {"role": "tool", "tool_call_id": tc.tool_call_id, "content": output}
+                )
         else:
-            # Text-recovered call has no valid id, so a `role: tool` message would
+            # A text-recovered call has no valid id, so a `role: tool` message would
             # be rejected. Replay the model's own output, then feed results back.
-            messages.append({"role": "assistant", "content": tc.raw_message.content or ""})
+            messages.append({"role": "assistant", "content": turn.raw_message.content or ""})
             messages.append(
                 {
                     "role": "user",
-                    "content": f"Tool `{tc.name}` returned:\n\n{output}",
+                    "content": "\n\n".join(
+                        f"Tool `{tc.name}` returned:\n\n{output}" for tc, output in outputs
+                    ),
                 }
             )
 

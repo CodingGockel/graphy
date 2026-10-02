@@ -24,7 +24,8 @@ runtime**. To change one, edit `.env` and restart.
 | `BLABLADOR_SPARQL_MODEL` | required | Model for the whole tool loop and the final answer, e.g. `alias-huge`. |
 | `LLM_TEMPERATURE` | `0.1` | Sampling temperature for all LLM calls. |
 | `LLM_MAX_TOKENS` | unset | Optional output-token cap. |
-| `LLM_STREAM_TOOL_LOOP` | `true` | Stream the tool-loop calls, so the model's reasoning shows up live. Switch off for a server that handles streamed tool requests badly; the final answer is streamed either way. **Blablador needs `false`:** it drops the closing `</think>` when a request with tools is streamed, so reasoning and answer cannot be told apart. |
+| `LLM_STREAM_TOOL_LOOP` | `true` | Stream the tool-loop calls, so the model's reasoning shows up live. Switch off for a server that handles streamed tool requests badly; the final answer is streamed either way. |
+| `LLM_TOOL_CHOICE` | `required` | `required`: every reply of the tool loop has to be a tool call and the loop ends with the `finish` tool, so all text of the loop is reasoning. `auto`: for a server that does not support `required`; the model may then end the loop with plain text. **Blablador needs `required`:** it drops the closing `</think>` in front of a tool call and whenever a request with tools is streamed, so with `auto` reasoning and answer text cannot be told apart. |
 
 ### Knowledge graph
 

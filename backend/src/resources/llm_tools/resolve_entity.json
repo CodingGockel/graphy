@@ -2,13 +2,13 @@
   "type": "function",
   "function": {
     "name": "resolve_entity",
-    "description": "Look up the real URI(s) for a name the user mentioned (species, city, botanical garden, ...) via full-text search over rdfs:label. Returns ranked candidates with their labels and match scores. Prefer this over guessing a URI. For species, pass the scientific (Latin) name, not a common name.",
+    "description": "Look up the real URI(s) for a name the user mentioned (a species, a place, an organization, ...) via full-text search over rdfs:label. Returns ranked candidates with all their labels and match scores. Call it for every named entity before you write a query, and use the returned URI in the query instead of matching the name as text. Several names: one call per name, all in the same message.",
     "parameters": {
       "type": "object",
       "properties": {
         "term": {
           "type": "string",
-          "description": "The name/label to look up, e.g. 'Achillea millefolium' or 'Jena'."
+          "description": "The name to look up, as one entity (not a whole phrase), e.g. 'Achillea millefolium' or 'Jena'."
         },
         "type": {
           "type": "string",

@@ -18,6 +18,9 @@ def settings_stub() -> SimpleNamespace:
         sparql_timeout=30.0,
         # Off by default: most tests mock a plain (non-streamed) completion.
         llm_stream_tool_loop=False,
+        # `auto` by default: most tests of the tool loop cover a model that may also
+        # answer with plain text. The `required` tests switch it.
+        llm_tool_choice="auto",
         persist_thinking=True,
         chat_history_depth=5,
         chat_max_tool_iterations=5,

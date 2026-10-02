@@ -35,18 +35,35 @@ QUERY = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 5"
 ONE_ROW = '{"results": {"bindings": [{"s": {"value": "x"}}]}}'
 
 
-def _tool_turn(name: str, arguments: dict, call_id: str = "c1") -> LLMTurn:
+def _tools_turn(*calls: tuple[str, dict]) -> LLMTurn:
+    """A message with several tool calls, given as `(name, arguments)`."""
     raw = ChatCompletionMessage(role="assistant", content=None)
     return LLMTurn(
-        tool_call=ToolCallResult(call_id, name, arguments, raw),
+        tool_calls=[
+            ToolCallResult(f"c{number}", name, arguments, raw)
+            for number, (name, arguments) in enumerate(calls, start=1)
+        ],
         answer=None,
         raw_message=raw,
     )
 
 
+def _tool_turn(name: str, arguments: dict, call_id: str = "c1") -> LLMTurn:
+    raw = ChatCompletionMessage(role="assistant", content=None)
+    return LLMTurn(
+        tool_calls=[ToolCallResult(call_id, name, arguments, raw)],
+        answer=None,
+        raw_message=raw,
+    )
+
+
+def _finish_turn() -> LLMTurn:
+    return _tool_turn("finish", {})
+
+
 def _answer_turn(text: str) -> LLMTurn:
     raw = ChatCompletionMessage(role="assistant", content=text)
-    return LLMTurn(tool_call=None, answer=text, raw_message=raw)
+    return LLMTurn(tool_calls=[], answer=text, raw_message=raw)
 
 
 class _StreamedLLM:
@@ -69,8 +86,8 @@ class _StreamedLLM:
                 raise item
             yield item
 
-    async def generate_answer_stream(self, question, query, results):
-        result = await self._mock.generate_answer(question, query, results)
+    async def generate_answer_stream(self, question, data, history=None):
+        result = await self._mock.generate_answer(question, data, history)
         for item in [("answer", result)] if isinstance(result, str) else result:
             yield item
 
@@ -401,7 +418,10 @@ class TestQuery:
         assert (finished.ok, finished.count, finished.error) == (True, 1, None)
         # The answer comes from the dedicated answer call, as one event.
         assert _answer(events) == "final answer"
-        llm.generate_answer.assert_awaited_once_with("my question", QUERY, ONE_ROW)
+        llm.generate_answer.assert_awaited_once()
+        question, data, history = llm.generate_answer.await_args.args
+        assert (question, history) == ("my question", [])
+        assert QUERY in data and ONE_ROW in data
         assert events[-1].row_count == 1
 
     async def test_step_is_persisted_with_its_result(self, chat_service, repo):
@@ -475,19 +495,165 @@ class TestQuery:
         assert len(feedback) == 1
         assert "syntax error" in feedback[0]
 
-    async def test_last_query_feeds_the_answer(self, chat_service, repo):
+    async def test_every_query_feeds_the_answer(self, chat_service, repo):
         service, llm, sparql, _ = chat_service
         llm.chat_with_tools.side_effect = [
             _tool_turn("execute_sparql_query", {"query": "SELECT ?a WHERE {} LIMIT 1"}),
             _tool_turn("execute_sparql_query", {"query": "SELECT ?b WHERE {} LIMIT 1"}),
-            _answer_turn("done"),
+            _finish_turn(),
         ]
+        sparql.execute.side_effect = [
+            '{"results": {"bindings": [{"a": {"value": "108"}}]}}',
+            '{"results": {"bindings": [{"b": {"value": "56"}}]}}',
+        ]
+
+        events = await _run(service, repo)
+
+        assert repo.start_step.await_count == 2
+        # The answer call gets both queries with their results, in the order they ran.
+        data = llm.generate_answer.await_args.args[1]
+        assert data.index("?a") < data.index('"108"') < data.index("?b") < data.index('"56"')
+        # row_count is that of the last query
+        assert events[-1].row_count == 1
+
+    async def test_failed_query_is_not_part_of_the_answer_data(self, chat_service, repo):
+        service, llm, sparql, _ = chat_service
+        llm.chat_with_tools.side_effect = [
+            _tool_turn("execute_sparql_query", {"query": "SELECT bad LIMIT 1"}),
+            _tool_turn("execute_sparql_query", {"query": QUERY}),
+            _finish_turn(),
+        ]
+        sparql.execute.side_effect = [SparqlQueryException("syntax error"), ONE_ROW]
 
         await _run(service, repo)
 
-        # every query is a step now, not only the last one
-        assert repo.start_step.await_count == 2
-        assert "?b" in llm.generate_answer.await_args.args[1]
+        data = llm.generate_answer.await_args.args[1]
+        assert "SELECT bad" not in data
+        assert QUERY in data
+
+    async def test_earlier_large_result_is_shortened_for_the_answer(self, chat_service, repo):
+        service, llm, sparql, _ = chat_service
+        llm.chat_with_tools.side_effect = [
+            _tool_turn("execute_sparql_query", {"query": "SELECT ?a WHERE {} LIMIT 100"}),
+            _tool_turn("execute_sparql_query", {"query": "SELECT ?b WHERE {} LIMIT 100"}),
+            _finish_turn(),
+        ]
+        rows = ", ".join('{"s": {"value": "row%d"}}' % n for n in range(40))
+        big = '{"results": {"bindings": [%s]}}' % rows
+        sparql.execute.side_effect = [big, big]
+
+        await _run(service, repo)
+
+        data = llm.generate_answer.await_args.args[1]
+        # the last result in full, the earlier one as a sample
+        assert data.count("row39") == 1
+        assert "showing 30 of 40 rows" in data
+
+
+class TestFinish:
+    async def test_finish_ends_the_loop_without_a_step(self, chat_service, repo):
+        service, llm, sparql, _ = chat_service
+        llm.chat_with_tools.side_effect = [
+            _tool_turn("execute_sparql_query", {"query": QUERY}),
+            _finish_turn(),
+        ]
+        sparql.execute.return_value = ONE_ROW
+
+        events = await _run(service, repo)
+
+        assert _names(events) == ["session", "step_started", "step_finished", "answer", "done"]
+        assert llm.chat_with_tools.await_count == 2
+        repo.start_step.assert_awaited_once()
+        assert _answer(events) == "final answer"
+
+    async def test_finish_without_data_still_asks_the_answer_call(self, chat_service, repo):
+        service, llm, _, _ = chat_service
+        llm.chat_with_tools.side_effect = [["Just a greeting.", _finish_turn()]]
+
+        events = await _run(service, repo, message="hallo")
+
+        assert _names(events) == ["session", "thinking", "answer", "done"]
+        repo.start_step.assert_not_awaited()
+        question, data, _ = llm.generate_answer.await_args.args
+        assert question == "hallo"
+        assert data == "(no query executed)"
+        assert events[-1].row_count is None
+        # the reasoning before `finish` belongs to the message
+        assert repo.complete_turn.await_args.kwargs["thinking"] == "Just a greeting."
+
+    async def test_calls_next_to_finish_are_still_executed(self, chat_service, repo):
+        service, llm, sparql, _ = chat_service
+        llm.chat_with_tools.side_effect = [
+            _tools_turn(("finish", {}), ("execute_sparql_query", {"query": QUERY})),
+        ]
+        sparql.execute.return_value = ONE_ROW
+
+        events = await _run(service, repo)
+
+        assert len(_steps(events)) == 1
+        assert llm.chat_with_tools.await_count == 1
+        assert QUERY in llm.generate_answer.await_args.args[1]
+
+
+class TestSeveralToolCalls:
+    async def test_each_call_of_a_message_is_a_step(self, chat_service, repo):
+        service, llm, sparql, lucene = chat_service
+        lucene.search.side_effect = [
+            [{"uri": "http://x/vienna", "label": "Vienna", "score": 9.0}],
+            [{"uri": "http://x/jena", "label": "Jena", "score": 9.0}],
+        ]
+        llm.chat_with_tools.side_effect = [
+            [
+                "Two places.",
+                _tools_turn(
+                    ("resolve_entity", {"term": "Vienna"}), ("resolve_entity", {"term": "Jena"})
+                ),
+            ],
+            _tool_turn("execute_sparql_query", {"query": QUERY}, call_id="q1"),
+            _finish_turn(),
+        ]
+        sparql.execute.return_value = ONE_ROW
+
+        events = await _run(service, repo)
+
+        steps = _steps(events)
+        assert [(s.ordinal, s.kind, s.args["term"]) for s, _ in steps[:2]] == [
+            (1, "resolve_entity", "Vienna"), (2, "resolve_entity", "Jena"),
+        ]
+        assert steps[2][0].ordinal == 3
+        # the reasoning of the message is stored with its first step
+        first, second, _ = [c.kwargs["thinking"] for c in repo.start_step.await_args_list]
+        assert (first, second) == ("Two places.", None)
+
+        # One tool reply per call went back to the model (the transcript is one growing
+        # list, so the reply to the query is in it as well).
+        transcript = llm.chat_with_tools.await_args.args[0]
+        replies = [m for m in transcript if m.get("role") == "tool"]
+        assert [m["tool_call_id"] for m in replies] == ["c1", "c2", "q1"]
+        assert "http://x/vienna" in replies[0]["content"]
+        assert "http://x/jena" in replies[1]["content"]
+
+        # the resolved names are part of the answer data
+        data = llm.generate_answer.await_args.args[1]
+        assert "'Vienna': \"Vienna\" <http://x/vienna>" in data
+        assert "'Jena': \"Jena\" <http://x/jena>" in data
+
+    async def test_clarification_ends_the_turn_before_the_remaining_calls(
+        self, chat_service, repo
+    ):
+        service, llm, sparql, _ = chat_service
+        llm.chat_with_tools.side_effect = [
+            _tools_turn(
+                ("ask_clarification", {"question": "Which year?"}),
+                ("execute_sparql_query", {"query": QUERY}),
+            ),
+        ]
+
+        events = await _run(service, repo)
+
+        assert _answer(events) == "Which year?"
+        assert len(_steps(events)) == 1
+        sparql.execute.assert_not_awaited()
 
 
 class TestResolveEntity:
@@ -562,9 +728,10 @@ class TestUsePreviousResults:
         # the result is not stored a second time
         assert repo.finish_step.await_args.kwargs["result"] is None
 
-        question, query, results = llm.generate_answer.await_args.args
-        assert (question, query) == ("and again", "SELECT ?old {}")
-        assert '"value": "1"' in results
+        question, data, _ = llm.generate_answer.await_args.args
+        assert question == "and again"
+        assert "SELECT ?old {}" in data
+        assert '"value": "1"' in data
         assert events[-1].row_count == 1
 
     async def test_unknown_turn_falls_back_to_latest(self, chat_service, repo):
@@ -641,7 +808,7 @@ class TestUsePreviousResults:
             "query": "SELECT ?old {}",
         }
         repo.get_step_result.assert_awaited_once_with(source_step)
-        assert llm.generate_answer.await_args.args[1] == "SELECT ?old {}"
+        assert "SELECT ?old {}" in llm.generate_answer.await_args.args[1]
 
     async def test_reusable_turns_are_listed_in_the_system_prompt(self, chat_service, repo):
         service, llm, _, _ = chat_service
@@ -932,6 +1099,24 @@ class TestHistory:
         sent = llm.chat_with_tools.await_args.args[0]
         assert [(m["role"], m["content"]) for m in sent[1:]] == [
             ("user", "q1"), ("assistant", "a1"), ("user", "q2"),
+        ]
+
+    async def test_history_is_sent_to_the_answer_call_too(self, chat_service, repo):
+        service, llm, sparql, _ = chat_service
+        repo.get_history.return_value = [
+            make_db_message("user", "q1", turn=1),
+            make_db_message("assistant", "a1", turn=1),
+        ]
+        llm.chat_with_tools.side_effect = [
+            _tool_turn("execute_sparql_query", {"query": QUERY}),
+            _finish_turn(),
+        ]
+
+        await _run(service, repo, message="q2")
+
+        # only the questions and answers: no tool calls of this or an earlier turn
+        assert llm.generate_answer.await_args.args[2] == [
+            {"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"},
         ]
 
     async def test_reasoning_of_an_earlier_answer_is_not_sent_back(self, chat_service, repo):

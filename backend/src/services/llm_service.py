@@ -18,14 +18,21 @@ from src.util.config import Settings
 from src.util.exceptions import LLMNoContentException, LLMServiceException
 from src.util.llm_utils import load_prompt
 from src.util.sparql_utils import strip_think
-from src.util.think_splitter import OPEN, Kind, ThinkSplitter, split_think
+from src.util.think_splitter import (
+    OPEN,
+    Kind,
+    ReasoningOnlySplitter,
+    ThinkSplitter,
+    reasoning_only,
+    split_think,
+)
 from src.models.schemas import ServiceHealth, ModelResponse
 from src.util.logger import logger
 
 
 # Output-token cap of the title call. Far more than a title needs: a reasoning model
 # spends tokens on its <think> block first.
-TITLE_MAX_TOKENS = 256
+TITLE_MAX_TOKENS = 1024
 TITLE_MAX_LENGTH = 80
 
 
@@ -39,10 +46,11 @@ class ToolCallResult:
 
 @dataclass
 class LLMTurn:
-    """One step of the agentic loop: either a tool call to execute, or a
-    final natural-language answer (when the model is done calling tools).
-    The answer is the model's text without its reasoning."""
-    tool_call: ToolCallResult | None
+    """One step of the agentic loop: either the tool calls to execute (a model may
+    ask for several in one message), or a final natural-language answer (when the
+    model wrote text instead of calling a tool). The answer is the model's text
+    without its reasoning."""
+    tool_calls: list[ToolCallResult]
     answer: str | None
     raw_message: ChatCompletionMessage
 
@@ -121,20 +129,25 @@ class LLMService:
         tools: list[dict[str, Any]],
     ) -> AsyncIterator[str | LLMTurn]:
         """Run one agentic turn. Yields the model's reasoning as it arrives (strings)
-        and, as the last item, the `LLMTurn`: a tool call to execute or, when the model
-        produced plain text instead, a final answer.
+        and, as the last item, the `LLMTurn`: the tool calls to execute or, when the
+        model produced plain text instead, a final answer.
 
         Stream for display, parse on the buffer: only reasoning is passed on live.
         Everything else is collected, because it may be a text-encoded tool call or the
         final answer, and the tool detection runs on the complete message.
+
+        With `llm_tool_choice` = `required` the model has to answer with a tool call,
+        so all of its text is reasoning (servers tend to drop the closing `</think>`
+        in front of a tool call, which makes the tags useless for telling them apart).
         """
+        required = self.settings.llm_tool_choice == "required"
         request: dict[str, Any] = dict(
             model=self.sparql_model,
             temperature=self.temperature,
             max_tokens=self._max_tokens(),
             messages=messages,
             tools=tools,
-            tool_choice="auto",
+            tool_choice=self.settings.llm_tool_choice,
         )
 
         if not self.settings.llm_stream_tool_loop:
@@ -144,9 +157,13 @@ class LLMService:
                 raise LLMServiceException(message=str(e)) from e
             choice = response.choices[0]
             # Not streamed, but still shown: the reasoning as one piece.
+            text = choice.message.content or ""
             thinking = "\n\n".join(
                 part
-                for part in (_reasoning(choice.message), split_think(choice.message.content or "")[0])
+                for part in (
+                    _reasoning(choice.message),
+                    reasoning_only(text) if required else split_think(text)[0],
+                )
                 if part
             )
             if thinking:
@@ -154,7 +171,7 @@ class LLMService:
             yield self._turn_from_message(choice.message, choice.finish_reason)
             return
 
-        splitter = ThinkSplitter()
+        splitter = ReasoningOnlySplitter() if required else ThinkSplitter()
         content = ""
         streamed_thinking = False
         calls: dict[int, dict[str, str]] = {}
@@ -187,7 +204,7 @@ class LLMService:
                 yield text
 
         # Reasoning that only ended with a lone </think> was not recognized on the way.
-        if not streamed_thinking:
+        if not streamed_thinking and not required:
             late_thinking = split_think(content)[0]
             if late_thinking:
                 yield late_thinking
@@ -210,33 +227,35 @@ class LLMService:
     def _turn_from_message(
         self, msg: ChatCompletionMessage, finish_reason: str | None
     ) -> LLMTurn:
-        """What a complete assistant message of the loop means: a tool call (structured,
-        or recovered from text) or the final answer."""
+        """What a complete assistant message of the loop means: tool calls (structured,
+        or one recovered from text) or the final answer."""
         if msg.tool_calls:
-            tool_call = msg.tool_calls[0]
-            try:
-                arguments = json.loads(tool_call.function.arguments)  # type: ignore[union-attr]
-            except json.JSONDecodeError as e:
-                raise LLMServiceException(
-                    message=f"Invalid tool call arguments: {tool_call.function.arguments}"  # type: ignore[union-attr]
-                ) from e
-            return LLMTurn(
-                tool_call=ToolCallResult(
-                    tool_call_id=tool_call.id,
-                    name=tool_call.function.name,  # type: ignore[union-attr]
-                    arguments=arguments,
-                    raw_message=msg,
-                ),
-                answer=None,
-                raw_message=msg,
-            )
+            tool_calls: list[ToolCallResult] = []
+            for tool_call in msg.tool_calls:
+                raw_arguments = tool_call.function.arguments  # type: ignore[union-attr]
+                try:
+                    # A tool without parameters may come with no arguments at all.
+                    arguments = json.loads(raw_arguments or "{}")
+                except json.JSONDecodeError as e:
+                    raise LLMServiceException(
+                        message=f"Invalid tool call arguments: {raw_arguments}"
+                    ) from e
+                tool_calls.append(
+                    ToolCallResult(
+                        tool_call_id=tool_call.id,
+                        name=tool_call.function.name,  # type: ignore[union-attr]
+                        arguments=arguments if isinstance(arguments, dict) else {},
+                        raw_message=msg,
+                    )
+                )
+            return LLMTurn(tool_calls=tool_calls, answer=None, raw_message=msg)
 
         # 2. Some models (e.g. MiniMax via vLLM) emit the tool call as text in
         #    `content` instead of a parsed tool_calls entry. Try to recover it.
         recovered = self._recover_tool_call_from_content(msg.content)
         if recovered is not None:
             logger.info("Recovered tool call from content: %s", recovered.name)
-            return LLMTurn(tool_call=recovered, answer=None, raw_message=msg)
+            return LLMTurn(tool_calls=[recovered], answer=None, raw_message=msg)
 
         # 3. No tool call at all → the model is done, this is the final answer.
         answer = split_think(msg.content or "")[1]
@@ -244,7 +263,7 @@ class LLMService:
             # Not for output cut off by the token cap: that really is reasoning only.
             answer = _answer_in_unclosed_think(msg.content or "")
         if answer:
-            return LLMTurn(tool_call=None, answer=answer, raw_message=msg)
+            return LLMTurn(tool_calls=[], answer=answer, raw_message=msg)
 
         logger.warning(
             "chat_with_tools: empty response. finish_reason=%s, message=%s",
@@ -348,21 +367,18 @@ class LLMService:
     async def generate_answer_stream(
         self,
         user_question: str,
-        sparql_query: str,
-        sparql_results: str | None,
+        data: str,
+        history: list[dict[str, str]] | None = None,
     ) -> AsyncIterator[tuple[Kind, str]]:
         """Dedicated final-answer call, streamed as `(kind, delta)` with the kind
         `thinking` or `answer`. Uses the static answer-interpreter prompt (not the
-        schema-heavy query prompt) and is given only the user question, the executed
-        query and its results — no tools available."""
-        user_content = (
-            f"User question: {user_question}\n\n"
-            f"SPARQL query:\n{sparql_query or '(no query executed)'}\n\n"
-            f"Query result:\n{sparql_results or '(no results available)'}"
-        )
+        schema-heavy query prompt) and is given the earlier questions and answers of
+        the chat, the user question and `data`: everything the turn's steps found
+        (resolved entities, every query with its result) — no tools available."""
         messages = [
             {"role": "system", "content": self.answer_system_prompt()},
-            {"role": "user", "content": user_content},
+            *(history or []),
+            {"role": "user", "content": f"User question: {user_question}\n\n{data}"},
         ]
         splitter = ThinkSplitter()
         answered = False
@@ -403,13 +419,16 @@ class LLMService:
         except Exception as e:
             raise LLMServiceException(message=str(e)) from e
 
-        text = strip_think(response.choices[0].message.content or "")
+        choice = response.choices[0]
+        text = strip_think(choice.message.content or "")
         # Reasoning that was cut off by the token cap is not a title.
         lines = [] if "<think>" in text else [line.strip() for line in text.splitlines()]
         title = next((line for line in lines if line), "")
         title = " ".join(title.strip("\"'`*#“”„«» ").split()).rstrip(".")
         if not title:
-            raise LLMNoContentException("LLM did not generate a title")
+            raise LLMNoContentException(
+                f"LLM did not generate a title (finish_reason={choice.finish_reason})"
+            )
         return title[:TITLE_MAX_LENGTH].rstrip()
 
     async def get_models(self) -> ModelResponse:

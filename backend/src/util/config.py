@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -29,6 +30,11 @@ class Settings(BaseSettings):
     # written. Some OpenAI-compatible servers parse tool calls less reliably when
     # streaming; switch it off for such a model (the final answer is streamed anyway).
     llm_stream_tool_loop: bool = True
+    # `required`: every reply of the tool loop has to be a tool call (the loop ends
+    # with the `finish` tool), so all text of the loop is reasoning. `auto` is for a
+    # server that does not support `required`: the model may then end the loop with
+    # plain text.
+    llm_tool_choice: Literal["required", "auto"] = "required"
 
     # Chat settings
     chat_history_depth: int

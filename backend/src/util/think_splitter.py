@@ -1,5 +1,6 @@
 """Separates `<think>…</think>` reasoning from LLM output: incrementally for a stream
-(`ThinkSplitter`) and over a complete text (`split_think`)."""
+(`ThinkSplitter`) and over a complete text (`split_think`). `ReasoningOnlySplitter` /
+`reasoning_only` are for output that is reasoning as a whole."""
 import re
 from typing import Literal
 
@@ -7,6 +8,9 @@ Kind = Literal["thinking", "answer"]
 
 OPEN = "<think>"
 CLOSE = "</think>"
+# Where a tool call that a server left in the text begins. Nothing from there on is
+# reasoning.
+TOOL_CALL_MARKERS = ("<minimax:tool_call>", "<tool_call>", "<invoke ")
 
 
 def _held_back(text: str, tag: str) -> int:
@@ -58,6 +62,51 @@ class ThinkSplitter:
         if not held:
             return []
         return [("thinking" if self._inside else "answer", held)]
+
+
+class ReasoningOnlySplitter:
+    """Passes the deltas of a stream on as `thinking`, all of them: for a call that has
+    to end in a tool call, so its text cannot be an answer.
+
+    The `<think>` tags are removed (the closing one is often missing in front of a
+    tool call), and the text ends at a tool-call marker. Same interface as
+    `ThinkSplitter`.
+    """
+
+    def __init__(self) -> None:
+        self._held = ""
+        self._ended = False
+
+    def feed(self, delta: str) -> list[tuple[Kind, str]]:
+        if self._ended:
+            return []
+        text = self._held + delta
+        self._held = ""
+        marker = min(
+            (index for index in (text.find(m) for m in TOOL_CALL_MARKERS) if index != -1),
+            default=-1,
+        )
+        if marker != -1:
+            self._ended = True
+            text = text[:marker]
+        else:
+            held = max(_held_back(text, tag) for tag in (OPEN, CLOSE, *TOOL_CALL_MARKERS))
+            if held:
+                text, self._held = text[: len(text) - held], text[len(text) - held:]
+        text = text.replace(OPEN, "").replace(CLOSE, "")
+        return [("thinking", text)] if text else []
+
+    def flush(self) -> list[tuple[Kind, str]]:
+        """Release text that was held back as a possible tag; call at the end of the stream."""
+        held, self._held = self._held, ""
+        return [("thinking", held)] if held and not self._ended else []
+
+
+def reasoning_only(text: str) -> str:
+    """A complete LLM output that is reasoning as a whole, without tags and without a
+    tool call left in the text."""
+    splitter = ReasoningOnlySplitter()
+    return "".join(part for _, part in splitter.feed(text) + splitter.flush()).strip()
 
 
 def split_think(text: str) -> tuple[str | None, str]:

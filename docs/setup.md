@@ -39,8 +39,8 @@ restarts. The backend creates its tables itself on startup; there is no migratio
 
 ```bash
 cd backend
-python -m venv .swep-venv
-source .swep-venv/bin/activate       # Windows: .swep-venv\Scripts\activate
+python -m venv ../.swep-venv
+source ../.swep-venv/bin/activate    # Windows: ..\.swep-venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env                 # fill in BLABLADOR_API_KEY
 uvicorn src.main:app --reload

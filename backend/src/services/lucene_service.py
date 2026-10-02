@@ -64,6 +64,9 @@ class LuceneService:
         better recall on morphology and typos. An optional `type` narrows results by
         the class' local name (prefix-agnostic), so the caller can pass e.g.
         `dwc:Organism` without us needing a prefix map.
+
+        One candidate per entity: its labels (names in several languages, synonyms) are
+        joined into one, so `limit` counts entities and the model sees every name.
         """
         raw_tokens = [w for w in term.split() if w.strip()]
         tokens = [re.sub(r"[^0-9A-Za-z]+", "", _fold_diacritics(w)) for w in raw_tokens]
@@ -87,13 +90,13 @@ class LuceneService:
         PREFIX inst: <http://www.ontotext.com/connectors/lucene/instance#>
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 
-        SELECT ?entity ?label ?score WHERE {{
+        SELECT ?entity ?score (GROUP_CONCAT(DISTINCT ?name; separator=" | ") AS ?label) WHERE {{
           ?search a inst:{_INDEX_NAME} ;
                   luc:query "{lucene_query}" ;
                   luc:entities ?entity .
-          ?entity rdfs:label ?label .
+          ?entity rdfs:label ?name .
           ?entity luc:score ?score .
-{type_filter}        }} ORDER BY DESC(?score) LIMIT {int(limit)}
+{type_filter}        }} GROUP BY ?entity ?score ORDER BY DESC(?score) LIMIT {int(limit)}
         """
 
         response_text = await self.sparql.execute(query)
