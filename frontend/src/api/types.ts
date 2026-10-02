@@ -73,6 +73,13 @@ export interface MessageOut {
   steps: StepOut[]
 }
 
+/** The result of one step; its shape depends on `kind` (SPARQL JSON, candidates, null). */
+export interface StepResult {
+  step_id: string
+  kind: string
+  result: unknown
+}
+
 export interface SessionDetail {
   id: string
   title: string | null

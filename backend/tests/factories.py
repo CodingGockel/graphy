@@ -27,6 +27,41 @@ def make_completion(message, finish_reason: str = "stop") -> SimpleNamespace:
     return SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason=finish_reason)])
 
 
+class FakeStream:
+    """Mimic the stream returned by `client.chat.completions.create(stream=True)`."""
+
+    def __init__(self, chunks, error: Exception | None = None):
+        self._chunks = list(chunks)
+        self._error = error
+        self.closed = False
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            yield chunk
+        if self._error is not None:
+            raise self._error
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def make_chunk(
+    content=None, tool_calls=None, finish_reason=None, reasoning_content=None
+) -> SimpleNamespace:
+    """Mimic one chunk of a streamed completion."""
+    delta = SimpleNamespace(content=content, tool_calls=tool_calls)
+    if reasoning_content is not None:
+        delta.reasoning_content = reasoning_content
+    return SimpleNamespace(choices=[SimpleNamespace(delta=delta, finish_reason=finish_reason)])
+
+
+def make_tool_call_delta(index: int, call_id=None, name=None, arguments=None) -> SimpleNamespace:
+    """Mimic one entry of `chunk.choices[0].delta.tool_calls`."""
+    return SimpleNamespace(
+        index=index, id=call_id, function=SimpleNamespace(name=name, arguments=arguments)
+    )
+
+
 def make_models(*ids: str) -> SimpleNamespace:
     """Mimic the object returned by `client.models.list` (has `.data`)."""
     return SimpleNamespace(data=[SimpleNamespace(id=i) for i in ids])

@@ -1,18 +1,24 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import AppIcon from './AppIcon.vue'
 import AppLogo from './AppLogo.vue'
+import ChatTrace from './ChatTrace.vue'
 import { useI18n } from '../i18n'
 import { renderMarkdown } from '../lib/markdown'
 import { splitThinking } from '../lib/thinking'
-import type { ChatEntry } from '../state/chat'
+import type { ChatEntry, TraceItem } from '../state/chat'
 
 const props = defineProps<{ message: ChatEntry }>()
 
 const { t } = useI18n()
-// Reasoning (<think>…</think>) is shown separately and collapsed; only the rest is the answer.
+// Fallback: reasoning that is still inside the text (<think>…</think>) is taken out of the
+// answer and becomes the last reasoning part of the trace.
 const split = computed(() =>
   props.message.role === 'assistant' ? splitThinking(props.message.content) : { thinking: null, answer: '' },
+)
+const trace = computed<TraceItem[]>(() =>
+  split.value.thinking
+    ? [...props.message.trace, { type: 'thinking', text: split.value.thinking }]
+    : props.message.trace,
 )
 const html = computed(() => (split.value.answer ? renderMarkdown(split.value.answer) : ''))
 </script>
@@ -22,17 +28,12 @@ const html = computed(() => (split.value.answer ? renderMarkdown(split.value.ans
     <span class="visually-hidden">{{ t('chat.you') }}:</span>
     <p class="bubble text">{{ message.content }}</p>
   </article>
-  <article v-else class="message assistant">
+  <!-- Nothing to show yet (the turn has just started): no empty bubble. -->
+  <article v-else-if="trace.length || html" class="message assistant">
     <AppLogo :size="28" class="avatar" />
     <span class="visually-hidden">Graphy:</span>
     <div class="bubble">
-      <details v-if="split.thinking" class="thinking" :class="{ only: !html }">
-        <summary>
-          <AppIcon name="chevron" :size="14" class="chevron" />
-          {{ t('chat.reasoning') }}
-        </summary>
-        <p class="reasoning">{{ split.thinking }}</p>
-      </details>
+      <ChatTrace v-if="trace.length" :items="trace" :class="{ 'trace-only': !html }" />
       <!-- Sanitized with DOMPurify in renderMarkdown. -->
       <div v-if="html" class="markdown" v-html="html" />
     </div>
@@ -78,58 +79,8 @@ const html = computed(() => (split.value.answer ? renderMarkdown(split.value.ans
   margin-top: 0.3rem;
 }
 
-.thinking {
-  margin: -0.15rem 0 0.6rem;
-}
-
-.thinking.only {
+.trace-only {
   margin-bottom: -0.15rem;
-}
-
-.thinking summary {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.1rem 0.4rem 0.1rem 0.2rem;
-  margin-left: -0.2rem;
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  font-size: 0.85rem;
-  cursor: pointer;
-  list-style: none;
-  user-select: none;
-  transition:
-    background-color 0.12s,
-    color 0.12s;
-}
-
-.thinking summary::-webkit-details-marker {
-  display: none;
-}
-
-.thinking summary:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.chevron {
-  transform: rotate(-90deg);
-  transition: transform 0.12s;
-}
-
-.thinking[open] .chevron {
-  transform: none;
-}
-
-.reasoning {
-  max-height: 20rem;
-  margin: 0.4rem 0 0;
-  padding: 0.1rem 0 0.1rem 0.75rem;
-  overflow-y: auto;
-  border-left: 2px solid var(--border-strong);
-  color: var(--text-muted);
-  font-size: 0.875rem;
-  white-space: pre-wrap;
 }
 
 .markdown > :deep(:first-child) {

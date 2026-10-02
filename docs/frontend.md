@@ -31,7 +31,8 @@ changes in [plans/streaming-rework.md](./plans/streaming-rework.md).
   - **`state/chat.ts`** adopts the session from the `session` event, appends `answer` deltas to
     the assistant entry and turns an `error` event into the same error box (with retry) as an
     HTTP error (`lib/errors.ts` maps its `kind`). `session_title` sets the title of the local
-    session entry. Steps and reasoning events are ignored for now.
+    session entry. The assistant entry is created on the `session` event; `thinking` and step
+    events build its trace (`ChatEntry.trace`).
     "Stop" aborts the fetch; a partial answer stays visible. A `404` on send or when opening a
     session removes the stale session from the local list; the error box then offers "New
     session" instead of a retry, which could not succeed.
@@ -44,8 +45,8 @@ frontend/
   public/               favicon.svg/.ico, apple-touch-icon, icon-192/512, site.webmanifest
   src/
     api/                client.ts (fetch wrapper, SSE reader, ApiError), types.ts
-    components/         AppSidebar, SessionItem, StatusPanel, ChatView, ChatMessage, ChatInput,
-                        GraphLoader, BaseDialog, SettingsDialog, AddSessionDialog,
+    components/         AppSidebar, SessionItem, StatusPanel, ChatView, ChatMessage, ChatTrace,
+                        TraceResult, ChatInput, GraphLoader, BaseDialog, SettingsDialog, AddSessionDialog,
                         AppLogo, AppWordmark, AppIcon
     i18n/ + locales/    t() helper; de.json, en.json, fr.json
     lib/                storage (safe localStorage), markdown, thinking (<think> splitter), errors
@@ -93,8 +94,22 @@ frontend/
   - the corner facing the speaker is flattened like a speech-bubble tail
 - **Answers:** rendered as Markdown (`marked`) and sanitized with `DOMPurify`. Links open in a new
   tab.
-- **Reasoning:** `<think>…</think>` (or text before a lone `</think>`) is split off by
-  `lib/thinking.ts`. It appears as a collapsed "Reasoning" section at the top of the bubble.
+- **Trace:** at the top of the answer bubble, `ChatTrace` lists everything the agent did, in
+  order: every reasoning part and every tool call as its own collapsed `<details>` item. It is
+  built live from the `thinking` / `step_started` / `step_finished` events and, after a reload,
+  from the stored steps (`steps[].thinking`, then the step; `messages.thinking` last), which gives
+  the same list.
+  - A step's summary shows its kind and state: `…` while it runs, the count (rows, candidates),
+    "failed" or "cancelled" (the turn ended while it ran).
+  - Opened, a step shows its arguments (the query, the search term, the referenced question) and
+    its error or result. The result is loaded with `GET /steps/{id}/result` the first time the
+    step is opened (`TraceResult`): query results as a plain table (first 50 rows), candidates as
+    a list.
+  - Steps without anything to show (`papers`, `clarification`) are a plain line. An unknown kind
+    is shown under its own name with its arguments as JSON, so a new backend tool needs no
+    frontend change.
+  - `lib/thinking.ts` remains as a fallback: a `<think>` block (or text before a lone `</think>`)
+    still inside the answer text becomes the last reasoning item.
 - **Waiting:** `GraphLoader` shows a breadth-first traversal of a small graph. Tree edges draw from
   node to node and the reached nodes light up. A timer drives the steps, so it also runs under
   reduced motion, just without the soft transitions.

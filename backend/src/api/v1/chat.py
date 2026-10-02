@@ -32,7 +32,7 @@ async def _mark_aborted(sessionmaker, state: TurnState) -> None:
     try:
         async with sessionmaker() as db:
             await ChatRepository(db).abort_message(
-                state.message_id, content=state.answer, thinking=state.thinking or None
+                state.message_id, content=state.answer, thinking=state.thinking.strip() or None
             )
     except Exception:
         logger.exception(f"Could not mark message {state.message_id} as aborted")

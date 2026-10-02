@@ -24,6 +24,7 @@ runtime**. To change one, edit `.env` and restart.
 | `BLABLADOR_SPARQL_MODEL` | required | Model for the whole tool loop and the final answer, e.g. `alias-huge`. |
 | `LLM_TEMPERATURE` | `0.1` | Sampling temperature for all LLM calls. |
 | `LLM_MAX_TOKENS` | unset | Optional output-token cap. |
+| `LLM_STREAM_TOOL_LOOP` | `true` | Stream the tool-loop calls, so the model's reasoning shows up live. Switch off for a server that handles streamed tool requests badly; the final answer is streamed either way. **Blablador needs `false`:** it drops the closing `</think>` when a request with tools is streamed, so reasoning and answer cannot be told apart. |
 
 ### Knowledge graph
 
@@ -40,6 +41,7 @@ runtime**. To change one, edit `.env` and restart.
 | `DATABASE_URL` | required | Async DSN, e.g. `postgresql+asyncpg://admin:admin@localhost:5432/db`. Must match `database/.env`. |
 | `CHAT_HISTORY_DEPTH` | required | Number of earlier turns loaded into the LLM context per request. |
 | `CHAT_MAX_TOOL_ITERATIONS` | required | Upper bound for the agentic tool loop. |
+| `PERSIST_THINKING` | `true` | Store the model's reasoning (`messages.thinking`, `steps.thinking`). Off: it is still streamed, but gone after a reload. |
 | `GENERATE_SESSION_TITLES` | `true` | Let the LLM write a session's title from its first question. Off: the shortened question is the title. |
 | `SESSION_TITLE_TIMEOUT` | `5` | Seconds a finished turn waits for a title that is still being generated; after that the shortened question is used. |
 | `CORS_ALLOW_ORIGINS` | `[]` | JSON list of allowed origins. Not needed locally (Vite proxy) or behind nginx (same origin). |

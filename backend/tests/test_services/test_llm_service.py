@@ -2,9 +2,17 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.services.llm_service import LLMService
+from src.services.llm_service import LLMService, LLMTurn
 from src.util.exceptions import LLMNoContentException, LLMServiceException
-from tests.factories import make_completion, make_message, make_models, make_tool_call
+from tests.factories import (
+    FakeStream,
+    make_chunk,
+    make_completion,
+    make_message,
+    make_models,
+    make_tool_call,
+    make_tool_call_delta,
+)
 
 
 def _make_service(settings_stub, *, create=None, models_list=None):
@@ -12,6 +20,25 @@ def _make_service(settings_stub, *, create=None, models_list=None):
     client.chat.completions.create = create if create is not None else AsyncMock()
     client.models.list = models_list if models_list is not None else AsyncMock()
     return LLMService(client=client, settings=settings_stub), client
+
+
+async def _loop_call(service) -> tuple[list[str], LLMTurn]:
+    """Run one tool-loop call; return its thinking deltas and the turn it ends with."""
+    items = [item async for item in service.chat_with_tools(messages=[], tools=[])]
+    assert isinstance(items[-1], LLMTurn)
+    return items[:-1], items[-1]
+
+
+async def _turn(service) -> LLMTurn:
+    return (await _loop_call(service))[1]
+
+
+def _streaming(settings_stub, chunks, error=None):
+    """A service whose tool loop is streamed, with a stream of the given chunks."""
+    settings_stub.llm_stream_tool_loop = True
+    stream = FakeStream(chunks, error)
+    service, client = _make_service(settings_stub, create=AsyncMock(return_value=stream))
+    return service, client, stream
 
 
 class TestSparqlModelProperty:
@@ -26,7 +53,7 @@ class TestChatWithTools:
         completion = make_completion(make_message(tool_calls=[tc]))
         service, _ = _make_service(settings_stub, create=AsyncMock(return_value=completion))
 
-        turn = await service.chat_with_tools(messages=[], tools=[])
+        turn = await _turn(service)
 
         assert turn.answer is None
         assert turn.tool_call is not None
@@ -38,7 +65,7 @@ class TestChatWithTools:
         completion = make_completion(make_message(tool_calls=[tc]))
         service, _ = _make_service(settings_stub, create=AsyncMock(return_value=completion))
         with pytest.raises(LLMServiceException):
-            await service.chat_with_tools(messages=[], tools=[])
+            await _turn(service)
 
     async def test_recovers_tool_call_from_text_content(self, settings_stub):
         content = (
@@ -48,7 +75,7 @@ class TestChatWithTools:
         completion = make_completion(make_message(content=content, tool_calls=None))
         service, _ = _make_service(settings_stub, create=AsyncMock(return_value=completion))
 
-        turn = await service.chat_with_tools(messages=[], tools=[])
+        turn = await _turn(service)
 
         assert turn.tool_call is not None
         assert turn.tool_call.name == "resolve_entity"
@@ -59,7 +86,7 @@ class TestChatWithTools:
         completion = make_completion(make_message(content=content, tool_calls=None))
         service, _ = _make_service(settings_stub, create=AsyncMock(return_value=completion))
 
-        turn = await service.chat_with_tools(messages=[], tools=[])
+        turn = await _turn(service)
 
         assert turn.tool_call.name == "ask_clarification"
         assert turn.tool_call.arguments == {"question": "which?"}
@@ -68,7 +95,7 @@ class TestChatWithTools:
         completion = make_completion(make_message(content="Here is the answer.", tool_calls=None))
         service, _ = _make_service(settings_stub, create=AsyncMock(return_value=completion))
 
-        turn = await service.chat_with_tools(messages=[], tools=[])
+        turn = await _turn(service)
 
         assert turn.tool_call is None
         assert turn.answer == "Here is the answer."
@@ -77,32 +104,247 @@ class TestChatWithTools:
         completion = make_completion(make_message(content=None, tool_calls=None))
         service, _ = _make_service(settings_stub, create=AsyncMock(return_value=completion))
         with pytest.raises(LLMNoContentException):
-            await service.chat_with_tools(messages=[], tools=[])
+            await _turn(service)
 
     async def test_client_error_raises_service_exception(self, settings_stub):
         service, _ = _make_service(
             settings_stub, create=AsyncMock(side_effect=RuntimeError("api down"))
         )
         with pytest.raises(LLMServiceException):
-            await service.chat_with_tools(messages=[], tools=[])
+            await _turn(service)
 
 
-class TestGenerateAnswer:
-    async def test_returns_content_with_think_stripped(self, settings_stub, mocker):
-        mocker.patch("src.services.llm_service.load_prompt", return_value="ANSWER PROMPT")
-        completion = make_completion(make_message(content="<think>reasoning</think>The answer."))
+class TestChatWithToolsNotStreamed:
+    """`llm_stream_tool_loop` off (the default of the test settings)."""
+
+    async def test_no_stream_is_requested(self, settings_stub):
+        completion = make_completion(make_message(content="Here is the answer."))
+        service, client = _make_service(settings_stub, create=AsyncMock(return_value=completion))
+
+        deltas, turn = await _loop_call(service)
+
+        assert deltas == []
+        assert turn.answer == "Here is the answer."
+        assert "stream" not in client.chat.completions.create.await_args.kwargs
+
+    async def test_reasoning_is_passed_on_in_one_piece(self, settings_stub):
+        completion = make_completion(make_message(content="<think>why</think>The answer."))
         service, _ = _make_service(settings_stub, create=AsyncMock(return_value=completion))
 
-        answer = await service.generate_answer("q?", "SELECT ?s {}", "{}")
+        deltas, turn = await _loop_call(service)
 
-        assert answer == "The answer."
+        assert deltas == ["why"]
+        assert turn.answer == "The answer."
 
-    async def test_no_content_raises(self, settings_stub, mocker):
-        mocker.patch("src.services.llm_service.load_prompt", return_value="ANSWER PROMPT")
-        completion = make_completion(make_message(content=None))
-        service, _ = _make_service(settings_stub, create=AsyncMock(return_value=completion))
+
+class TestChatWithToolsStreamed:
+    async def test_tool_call_split_over_many_deltas(self, settings_stub):
+        service, client, stream = _streaming(
+            settings_stub,
+            [
+                make_chunk(tool_calls=[make_tool_call_delta(0, "call_1", "execute_sparql_query", "")]),
+                make_chunk(tool_calls=[make_tool_call_delta(0, arguments='{"query": ')]),
+                make_chunk(tool_calls=[make_tool_call_delta(0, arguments='"SELECT ?s {}"}')]),
+                make_chunk(finish_reason="tool_calls"),
+            ],
+        )
+
+        deltas, turn = await _loop_call(service)
+
+        assert deltas == []
+        assert turn.tool_call is not None
+        assert turn.tool_call.tool_call_id == "call_1"
+        assert turn.tool_call.name == "execute_sparql_query"
+        assert turn.tool_call.arguments == {"query": "SELECT ?s {}"}
+        # the rebuilt message carries the call, for the transcript of the next iteration
+        assert turn.raw_message.tool_calls[0].function.arguments == '{"query": "SELECT ?s {}"}'
+        assert client.chat.completions.create.await_args.kwargs["stream"] is True
+        assert stream.closed
+
+    async def test_first_of_two_tool_calls_wins(self, settings_stub):
+        service, _, _ = _streaming(
+            settings_stub,
+            [
+                make_chunk(tool_calls=[make_tool_call_delta(0, "call_1", "resolve_entity", "")]),
+                make_chunk(tool_calls=[make_tool_call_delta(1, "call_2", "ask_clarification", "")]),
+                make_chunk(tool_calls=[make_tool_call_delta(1, arguments='{"question": "?"}')]),
+                make_chunk(tool_calls=[make_tool_call_delta(0, arguments='{"term": "rose"}')]),
+            ],
+        )
+
+        turn = await _turn(service)
+
+        assert turn.tool_call.name == "resolve_entity"
+        assert turn.tool_call.arguments == {"term": "rose"}
+        assert len(turn.raw_message.tool_calls) == 2
+
+    async def test_text_encoded_tool_call_is_recovered_from_the_buffer(self, settings_stub):
+        service, _, _ = _streaming(
+            settings_stub,
+            [
+                make_chunk(content='<invoke name="resolve_'),
+                make_chunk(content='entity"><parameter name="term">rose</para'),
+                make_chunk(content="meter></invoke>"),
+            ],
+        )
+
+        deltas, turn = await _loop_call(service)
+
+        # Nothing but reasoning is passed on live.
+        assert deltas == []
+        assert turn.tool_call.name == "resolve_entity"
+        assert turn.tool_call.arguments == {"term": "rose"}
+
+    async def test_thinking_is_passed_on_while_the_tool_call_is_still_detected(
+        self, settings_stub
+    ):
+        service, _, _ = _streaming(
+            settings_stub,
+            [
+                make_chunk(content="<thi"),
+                make_chunk(content="nk>I need "),
+                make_chunk(content="a query.</think>"),
+                make_chunk(tool_calls=[make_tool_call_delta(0, "call_1", "execute_sparql_query")]),
+                make_chunk(tool_calls=[make_tool_call_delta(0, arguments='{"query": "ASK {}"}')]),
+            ],
+        )
+
+        deltas, turn = await _loop_call(service)
+
+        assert deltas == ["I need ", "a query."]
+        assert turn.tool_call.arguments == {"query": "ASK {}"}
+
+    async def test_plain_answer_is_buffered_and_its_reasoning_split_off(self, settings_stub):
+        service, _, _ = _streaming(
+            settings_stub,
+            [make_chunk(content="<think>easy</think>Hel"), make_chunk(content="lo.")],
+        )
+
+        deltas, turn = await _loop_call(service)
+
+        assert deltas == ["easy"]
+        assert turn.tool_call is None
+        assert turn.answer == "Hello."
+
+    async def test_reasoning_content_field_is_thinking(self, settings_stub):
+        service, _, _ = _streaming(
+            settings_stub,
+            [make_chunk(reasoning_content="hm"), make_chunk(content="Hello.")],
+        )
+
+        deltas, turn = await _loop_call(service)
+
+        assert deltas == ["hm"]
+        assert turn.answer == "Hello."
+
+    async def test_reasoning_before_a_lone_closing_tag_is_sent_at_the_end(self, settings_stub):
+        service, _, _ = _streaming(
+            settings_stub,
+            [make_chunk(content="why"), make_chunk(content="</think>Hello.")],
+        )
+
+        deltas, turn = await _loop_call(service)
+
+        assert deltas == ["why"]
+        assert turn.answer == "Hello."
+
+    async def test_answer_after_a_dropped_closing_tag_is_found(self, settings_stub):
+        # Blablador drops </think> when a request with tools is streamed.
+        service, _, _ = _streaming(
+            settings_stub,
+            [
+                make_chunk(content="<think>Just a greeting.\n"),
+                make_chunk(content="\n\nHello!\n\nHow can I help?"),
+                make_chunk(finish_reason="stop"),
+            ],
+        )
+
+        turn = await _turn(service)
+
+        assert turn.answer == "Hello!\n\nHow can I help?"
+
+    async def test_unclosed_block_without_a_gap_is_the_answer(self, settings_stub):
+        service, _, _ = _streaming(
+            settings_stub, [make_chunk(content="<think>Hello!"), make_chunk(finish_reason="stop")]
+        )
+        assert (await _turn(service)).answer == "Hello!"
+
+    async def test_reasoning_cut_off_by_the_token_cap_is_no_answer(self, settings_stub):
+        service, _, _ = _streaming(
+            settings_stub,
+            [make_chunk(content="<think>Let me\n\n\nthink"), make_chunk(finish_reason="length")],
+        )
         with pytest.raises(LLMNoContentException):
-            await service.generate_answer("q?", "SELECT ?s {}", None)
+            await _turn(service)
+
+    async def test_chunks_without_a_choice_are_skipped(self, settings_stub):
+        usage_only = make_chunk()
+        usage_only.choices = []
+        service, _, _ = _streaming(settings_stub, [usage_only, make_chunk(content="Hello.")])
+
+        assert (await _turn(service)).answer == "Hello."
+
+    async def test_empty_stream_raises_no_content(self, settings_stub):
+        service, _, _ = _streaming(settings_stub, [make_chunk(finish_reason="length")])
+        with pytest.raises(LLMNoContentException):
+            await _turn(service)
+
+    async def test_invalid_tool_arguments_raise(self, settings_stub):
+        service, _, _ = _streaming(
+            settings_stub,
+            [make_chunk(tool_calls=[make_tool_call_delta(0, "call_1", "resolve_entity", "not-json")])],
+        )
+        with pytest.raises(LLMServiceException):
+            await _turn(service)
+
+    async def test_error_in_the_middle_of_the_stream_raises_service_exception(self, settings_stub):
+        service, _, stream = _streaming(
+            settings_stub, [make_chunk(content="Hel")], error=RuntimeError("connection lost")
+        )
+        with pytest.raises(LLMServiceException):
+            await _turn(service)
+        assert stream.closed
+
+
+class TestGenerateAnswerStream:
+    async def _answer(self, settings_stub, mocker, chunks, error=None):
+        mocker.patch("src.services.llm_service.load_prompt", return_value="ANSWER PROMPT")
+        stream = FakeStream(chunks, error)
+        service, client = _make_service(settings_stub, create=AsyncMock(return_value=stream))
+        parts = [p async for p in service.generate_answer_stream("q?", "SELECT ?s {}", "{}")]
+        return parts, client
+
+    async def test_answer_is_streamed_with_its_reasoning_split_off(self, settings_stub, mocker):
+        parts, client = await self._answer(
+            settings_stub,
+            mocker,
+            [
+                make_chunk(content="<think>one row</thi"),
+                make_chunk(content="nk>The "),
+                make_chunk(content="answer."),
+            ],
+        )
+
+        assert parts == [("thinking", "one row"), ("answer", "The "), ("answer", "answer.")]
+        kwargs = client.chat.completions.create.await_args.kwargs
+        assert kwargs["stream"] is True
+        assert "tools" not in kwargs
+
+    async def test_reasoning_content_field_is_thinking(self, settings_stub, mocker):
+        parts, _ = await self._answer(
+            settings_stub,
+            mocker,
+            [make_chunk(reasoning_content="one row"), make_chunk(content="The answer.")],
+        )
+        assert parts == [("thinking", "one row"), ("answer", "The answer.")]
+
+    @pytest.mark.parametrize(
+        "chunks",
+        [[], [make_chunk(finish_reason="stop")], [make_chunk(content="<think>cut off")]],
+    )
+    async def test_stream_without_an_answer_raises_no_content(self, settings_stub, mocker, chunks):
+        with pytest.raises(LLMNoContentException):
+            await self._answer(settings_stub, mocker, chunks)
 
     async def test_client_error_raises(self, settings_stub, mocker):
         mocker.patch("src.services.llm_service.load_prompt", return_value="ANSWER PROMPT")
@@ -110,7 +352,13 @@ class TestGenerateAnswer:
             settings_stub, create=AsyncMock(side_effect=RuntimeError("api down"))
         )
         with pytest.raises(LLMServiceException):
-            await service.generate_answer("q?", "SELECT ?s {}", None)
+            [p async for p in service.generate_answer_stream("q?", "SELECT ?s {}", None)]
+
+    async def test_error_in_the_middle_of_the_stream_raises(self, settings_stub, mocker):
+        with pytest.raises(LLMServiceException):
+            await self._answer(
+                settings_stub, mocker, [make_chunk(content="The ")], error=RuntimeError("lost")
+            )
 
 
 class TestGenerateTitle:

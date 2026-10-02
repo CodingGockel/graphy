@@ -5,6 +5,7 @@ import type {
   HealthResponse,
   SessionDetail,
   SessionSummary,
+  StepResult,
 } from './types'
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '/api/v1').replace(/\/$/, '')
@@ -176,6 +177,11 @@ export const api = {
 
   deleteSession(sessionId: string): Promise<void> {
     return request<void>(sessionPath(sessionId), { method: 'DELETE' })
+  },
+
+  /** Loaded on demand: results are neither part of the chat stream nor of the history. */
+  getStepResult(stepId: string, signal?: AbortSignal): Promise<StepResult> {
+    return request<StepResult>(`/steps/${encodeURIComponent(stepId)}/result`, { signal })
   },
 
   /** The backend answers 503 when a service is degraded or down, with the same body. */

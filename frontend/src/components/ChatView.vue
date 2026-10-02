@@ -16,15 +16,35 @@ const isEmpty = computed(
   () => messages.value.length === 0 && !loadingHistory.value && !pending.value && !chatError.value,
 )
 
-// Keep the newest content in view.
+function scrollToEnd(): void {
+  const el = scroller.value
+  if (el) el.scrollTop = el.scrollHeight
+}
+
+// A new message, the loader or an error: bring it into view.
 watch(
   () => [messages.value, messages.value.length, pending.value, aborted.value, chatError.value],
   async () => {
     await nextTick()
-    const el = scroller.value
-    if (el) el.scrollTop = el.scrollHeight
+    scrollToEnd()
   },
 )
+
+// What grows while a turn is streamed: the answer text, the trace and its last item.
+function streamProgress(): unknown[] {
+  const last = messages.value[messages.value.length - 1]
+  const item = last?.trace[last.trace.length - 1]
+  return [last?.content.length, last?.trace.length, item?.type === 'thinking' ? item.text.length : item?.status]
+}
+
+// Follow it, unless the user has scrolled up to read something.
+watch(streamProgress, async () => {
+  const el = scroller.value
+  // Measured before the DOM grows.
+  const atEnd = !el || el.scrollHeight - el.scrollTop - el.clientHeight < 80
+  await nextTick()
+  if (atEnd) scrollToEnd()
+})
 </script>
 
 <template>

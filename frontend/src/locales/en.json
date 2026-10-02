@@ -65,6 +65,30 @@
     "sessionGone": "This session no longer exists.",
     "details": "Details"
   },
+  "trace": {
+    "kind": {
+      "resolve_entity": "Entity lookup",
+      "sparql_query": "SPARQL query",
+      "previous_results": "Earlier results",
+      "papers": "Documents loaded",
+      "clarification": "Clarifying question"
+    },
+    "failed": "failed",
+    "cancelled": "cancelled",
+    "rows_one": "{count} row",
+    "rows_other": "{count} rows",
+    "candidates_one": "{count} candidate",
+    "candidates_other": "{count} candidates",
+    "query": "Query",
+    "result": "Result",
+    "term": "Search term",
+    "type": "Type",
+    "turn": "Results of question {turn} of this session",
+    "rowsShown": "{shown} of {total} rows",
+    "empty": "No result.",
+    "loading": "Loading result …",
+    "loadFailed": "The result could not be loaded."
+  },
   "errors": {
     "network": "The backend is not reachable.",
     "unavailable": "A required service is currently unavailable.",

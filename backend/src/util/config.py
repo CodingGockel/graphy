@@ -25,9 +25,17 @@ class Settings(BaseSettings):
     # served from another host (e.g. local dev against a remote backend).
     cors_allow_origins: list[str] = []
 
+    # Stream the tool-loop calls, so the model's reasoning shows up while it is
+    # written. Some OpenAI-compatible servers parse tool calls less reliably when
+    # streaming; switch it off for such a model (the final answer is streamed anyway).
+    llm_stream_tool_loop: bool = True
+
     # Chat settings
     chat_history_depth: int
     chat_max_tool_iterations: int
+    # Store the model's reasoning (messages.thinking, steps.thinking). Off: it is
+    # still streamed to the client, but gone after a reload.
+    persist_thinking: bool = True
     # The generated query-generation prompt the backend loads at runtime.
     # Produced by src/services/build_prompt.py from the template below.
     system_prompt_path: str

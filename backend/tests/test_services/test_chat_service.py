@@ -13,6 +13,7 @@ from src.models.events import (
     SessionTitleEvent,
     StepFinishedEvent,
     StepStartedEvent,
+    ThinkingEvent,
 )
 from src.models.schemas import ModelResponse
 from src.services.chat_service import (
@@ -48,6 +49,32 @@ def _answer_turn(text: str) -> LLMTurn:
     return LLMTurn(tool_call=None, answer=text, raw_message=raw)
 
 
+class _StreamedLLM:
+    """Gives ChatService the streaming interface of LLMService on top of the mock the
+    tests script. `chat_with_tools` yields what the mock returns: an `LLMTurn`, or a
+    list of thinking deltas ending with one (or with an exception to raise). `generate_answer_stream` yields what the
+    mock's `generate_answer` returns: a text (one answer delta) or a list of
+    `(kind, delta)`."""
+
+    def __init__(self, mock):
+        self._mock = mock
+
+    def __getattr__(self, name):
+        return getattr(self._mock, name)
+
+    async def chat_with_tools(self, messages, tools):
+        result = await self._mock.chat_with_tools(messages, tools)
+        for item in result if isinstance(result, list) else [result]:
+            if isinstance(item, Exception):  # a stream that breaks off
+                raise item
+            yield item
+
+    async def generate_answer_stream(self, question, query, results):
+        result = await self._mock.generate_answer(question, query, results)
+        for item in [("answer", result)] if isinstance(result, str) else result:
+            yield item
+
+
 @pytest.fixture
 def repo():
     repo = AsyncMock()
@@ -76,7 +103,9 @@ def chat_service(settings_stub):
     lucene = MagicMock()
     lucene.search = AsyncMock(return_value=[])
 
-    service = ChatService(llm=llm, sparql=sparql, lucene=lucene, settings=settings_stub)
+    service = ChatService(
+        llm=_StreamedLLM(llm), sparql=sparql, lucene=lucene, settings=settings_stub
+    )
     return service, llm, sparql, lucene
 
 
@@ -644,6 +673,125 @@ class TestPapers:
         assert repo.finish_step.await_args.kwargs["result"] is None
         assert llm.chat_with_tools.await_args_list[1].args[0][-1]["content"] == "PAPERS"
         assert _answer(events) == "From the papers."
+
+
+class TestStreaming:
+    async def test_answer_arrives_in_several_events(self, chat_service, repo):
+        service, llm, sparql, _ = chat_service
+        llm.chat_with_tools.side_effect = [
+            _tool_turn("execute_sparql_query", {"query": QUERY}),
+            _answer_turn("done"),
+        ]
+        sparql.execute.return_value = ONE_ROW
+        llm.generate_answer.return_value = [
+            ("thinking", "one row"), ("answer", "It is "), ("answer", "x."),
+        ]
+
+        state = TurnState()
+        events = await _run(service, repo, state=state)
+
+        assert _names(events) == [
+            "session", "step_started", "step_finished", "thinking", "answer", "answer", "done",
+        ]
+        assert state.answer == "It is x."
+        complete = repo.complete_turn.await_args.kwargs
+        assert complete == {"content": "It is x.", "thinking": "one row"}
+
+    async def test_loop_reasoning_is_sent_between_the_steps_and_stored_on_them(
+        self, chat_service, repo
+    ):
+        service, llm, sparql, _ = chat_service
+        llm.chat_with_tools.side_effect = [
+            ["I need ", "a query. ", _tool_turn("execute_sparql_query", {"query": QUERY})],
+            _tool_turn("execute_sparql_query", {"query": QUERY}, call_id="c2"),
+            ["Enough data.", _answer_turn("done")],
+        ]
+        sparql.execute.return_value = ONE_ROW
+        llm.generate_answer.return_value = [("thinking", "So: x."), ("answer", "x")]
+
+        events = await _run(service, repo)
+
+        assert _names(events) == [
+            "session",
+            "thinking", "thinking", "step_started", "step_finished",
+            "step_started", "step_finished",
+            "thinking", "thinking", "answer",
+            "done",
+        ]
+        assert [e.delta for e in events if isinstance(e, ThinkingEvent)] == [
+            "I need ", "a query. ", "Enough data.", "So: x.",
+        ]
+        # The reasoning before a tool call belongs to its step, the rest to the message.
+        first, second = [c.kwargs["thinking"] for c in repo.start_step.await_args_list]
+        assert (first, second) == ("I need a query.", None)
+        assert repo.complete_turn.await_args.kwargs["thinking"] == "Enough data.\n\nSo: x."
+
+    async def test_answer_without_data_is_sent_once_with_its_reasoning_split_off(
+        self, chat_service, repo
+    ):
+        service, llm, _, _ = chat_service
+        llm.chat_with_tools.side_effect = [["Just a greeting.", _answer_turn("Hello.")]]
+
+        events = await _run(service, repo)
+
+        assert _names(events) == ["session", "thinking", "answer", "done"]
+        assert _answer(events) == "Hello."
+        assert repo.complete_turn.await_args.kwargs == {
+            "content": "Hello.", "thinking": "Just a greeting.",
+        }
+
+    async def test_without_persist_thinking_it_is_streamed_but_not_stored(
+        self, chat_service, repo
+    ):
+        service, llm, sparql, _ = chat_service
+        service.settings.persist_thinking = False
+        llm.chat_with_tools.side_effect = [
+            ["I need a query.", _tool_turn("execute_sparql_query", {"query": QUERY})],
+            ["Enough data.", _answer_turn("done")],
+        ]
+        sparql.execute.return_value = ONE_ROW
+        llm.generate_answer.return_value = [("thinking", "So: x."), ("answer", "r</think>x")]
+
+        state = TurnState()
+        events = await _run(service, repo, state=state)
+
+        assert _names(events).count("thinking") == 3
+        assert repo.start_step.await_args.kwargs["thinking"] is None
+        assert repo.complete_turn.await_args.kwargs == {"content": "x", "thinking": None}
+        assert state.thinking == ""
+
+    async def test_answer_with_a_lone_closing_tag_is_stored_split(self, chat_service, repo):
+        service, llm, sparql, _ = chat_service
+        llm.chat_with_tools.side_effect = [
+            _tool_turn("execute_sparql_query", {"query": QUERY}),
+            _answer_turn("done"),
+        ]
+        sparql.execute.return_value = ONE_ROW
+        # The opening tag was in the prompt: the splitter could not know this is reasoning.
+        llm.generate_answer.return_value = [("answer", "one row</think>"), ("answer", "\nIt is x.")]
+
+        await _run(service, repo)
+
+        assert repo.complete_turn.await_args.kwargs == {
+            "content": "It is x.", "thinking": "one row",
+        }
+
+    async def test_reasoning_since_the_last_step_is_what_an_abort_would_store(
+        self, chat_service, repo
+    ):
+        service, llm, sparql, _ = chat_service
+        llm.chat_with_tools.side_effect = [
+            ["I need a query.", _tool_turn("execute_sparql_query", {"query": QUERY})],
+            ["Now I ", RuntimeError("cut off")],
+        ]
+        sparql.execute.return_value = ONE_ROW
+
+        state = TurnState()
+        with pytest.raises(RuntimeError):
+            async for _ in service.run(None, "hi", repo, state):
+                pass
+
+        assert state.thinking == "Now I "
 
 
 class TestClarification:

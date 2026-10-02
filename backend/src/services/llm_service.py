@@ -1,16 +1,24 @@
 import asyncio
 import json
 import re
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
 from openai import AsyncOpenAI, NOT_GIVEN
-from openai.types.chat import ChatCompletion, ChatCompletionMessage
+from openai.types.chat import (
+    ChatCompletion,
+    ChatCompletionChunk,
+    ChatCompletionMessage,
+    ChatCompletionMessageToolCall,
+)
+from openai.types.chat.chat_completion_message_tool_call import Function
 
 from src.util.config import Settings
 from src.util.exceptions import LLMNoContentException, LLMServiceException
 from src.util.llm_utils import load_prompt
 from src.util.sparql_utils import strip_think
+from src.util.think_splitter import OPEN, Kind, ThinkSplitter, split_think
 from src.models.schemas import ServiceHealth, ModelResponse
 from src.util.logger import logger
 
@@ -32,10 +40,36 @@ class ToolCallResult:
 @dataclass
 class LLMTurn:
     """One step of the agentic loop: either a tool call to execute, or a
-    final natural-language answer (when the model is done calling tools)."""
+    final natural-language answer (when the model is done calling tools).
+    The answer is the model's text without its reasoning."""
     tool_call: ToolCallResult | None
     answer: str | None
     raw_message: ChatCompletionMessage
+
+
+def _reasoning(part: Any) -> str:
+    """Reasoning that a server sends in a field of its own (next to `content`) instead
+    of inside `<think>` tags. Works for a message and for a stream delta."""
+    for name in ("reasoning_content", "reasoning"):
+        value = getattr(part, name, None)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def _answer_in_unclosed_think(content: str) -> str:
+    """The answer inside a `<think>` block that never ends.
+
+    Some servers drop the closing `</think>` when a request with tools is streamed
+    (seen with Blablador / MiniMax): reasoning and answer then arrive as one block.
+    The tag leaves a gap of blank lines behind; what follows it is the answer.
+    Without such a gap the whole block is, so the user gets the text in any case."""
+    start = content.rfind(OPEN)
+    if start == -1:
+        return ""
+    block = content[start + len(OPEN):]
+    _, gap, rest = block.partition("\n\n\n")
+    return (rest if gap and rest.strip() else block).strip()
 
 
 class LLMService:
@@ -63,28 +97,121 @@ class LLMService:
         """Static, KG-agnostic system prompt for the dedicated final answer call."""
         return load_prompt(self.settings.answer_system_prompt_path)
 
+    def _max_tokens(self) -> Any:
+        return self.max_tokens if self.max_tokens is not None else NOT_GIVEN
+
+    async def _stream(self, **request: Any) -> AsyncIterator[ChatCompletionChunk]:
+        """The chunks of a streamed completion that carry a choice. Errors, also in the
+        middle of the stream, become an LLMServiceException."""
+        try:
+            stream: Any = await self.client.chat.completions.create(stream=True, **request)  # type: ignore
+            try:
+                async for chunk in stream:
+                    if chunk.choices:
+                        yield chunk
+            finally:
+                # Also when the consumer stops early (cancelled turn): release the connection.
+                await stream.close()
+        except Exception as e:
+            raise LLMServiceException(message=str(e)) from e
+
     async def chat_with_tools(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
-    ) -> LLMTurn:
-        """Run one agentic turn. Returns either a tool call to execute or, when
-        the model produces plain text instead of a tool call, a final answer."""
-        try:
-            response: ChatCompletion = await self.client.chat.completions.create(
-                model=self.sparql_model,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens if self.max_tokens is not None else NOT_GIVEN,  # type: ignore
-                messages=messages,  # type: ignore
-                tools=tools,  # type: ignore
-                tool_choice="auto",
+    ) -> AsyncIterator[str | LLMTurn]:
+        """Run one agentic turn. Yields the model's reasoning as it arrives (strings)
+        and, as the last item, the `LLMTurn`: a tool call to execute or, when the model
+        produced plain text instead, a final answer.
+
+        Stream for display, parse on the buffer: only reasoning is passed on live.
+        Everything else is collected, because it may be a text-encoded tool call or the
+        final answer, and the tool detection runs on the complete message.
+        """
+        request: dict[str, Any] = dict(
+            model=self.sparql_model,
+            temperature=self.temperature,
+            max_tokens=self._max_tokens(),
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+
+        if not self.settings.llm_stream_tool_loop:
+            try:
+                response: ChatCompletion = await self.client.chat.completions.create(**request)  # type: ignore
+            except Exception as e:
+                raise LLMServiceException(message=str(e)) from e
+            choice = response.choices[0]
+            # Not streamed, but still shown: the reasoning as one piece.
+            thinking = "\n\n".join(
+                part
+                for part in (_reasoning(choice.message), split_think(choice.message.content or "")[0])
+                if part
             )
-        except Exception as e:
-            raise LLMServiceException(message=str(e)) from e
+            if thinking:
+                yield thinking
+            yield self._turn_from_message(choice.message, choice.finish_reason)
+            return
 
-        choice = response.choices[0]
-        msg = choice.message
+        splitter = ThinkSplitter()
+        content = ""
+        streamed_thinking = False
+        calls: dict[int, dict[str, str]] = {}
+        finish_reason: str | None = None
 
+        async for chunk in self._stream(**request):
+            choice = chunk.choices[0]
+            delta = choice.delta
+            finish_reason = choice.finish_reason or finish_reason
+            reasoning = _reasoning(delta)
+            if reasoning:
+                yield reasoning
+            if delta.content:
+                content += delta.content
+                for kind, text in splitter.feed(delta.content):
+                    if kind == "thinking":
+                        streamed_thinking = True
+                        yield text
+            # A tool call arrives in fragments: id and name first, then the arguments.
+            for fragment in delta.tool_calls or []:
+                call = calls.setdefault(fragment.index, {"id": "", "name": "", "arguments": ""})
+                if fragment.id:
+                    call["id"] = fragment.id
+                if fragment.function is not None:
+                    call["name"] += fragment.function.name or ""
+                    call["arguments"] += fragment.function.arguments or ""
+        for kind, text in splitter.flush():
+            if kind == "thinking":
+                streamed_thinking = True
+                yield text
+
+        # Reasoning that only ended with a lone </think> was not recognized on the way.
+        if not streamed_thinking:
+            late_thinking = split_think(content)[0]
+            if late_thinking:
+                yield late_thinking
+
+        message = ChatCompletionMessage(
+            role="assistant",
+            content=content or None,
+            tool_calls=[
+                ChatCompletionMessageToolCall(
+                    id=call["id"],
+                    type="function",
+                    function=Function(name=call["name"], arguments=call["arguments"]),
+                )
+                for _, call in sorted(calls.items())
+            ]
+            or None,
+        )
+        yield self._turn_from_message(message, finish_reason)
+
+    def _turn_from_message(
+        self, msg: ChatCompletionMessage, finish_reason: str | None
+    ) -> LLMTurn:
+        """What a complete assistant message of the loop means: a tool call (structured,
+        or recovered from text) or the final answer."""
         if msg.tool_calls:
             tool_call = msg.tool_calls[0]
             try:
@@ -112,17 +239,21 @@ class LLMService:
             return LLMTurn(tool_call=recovered, answer=None, raw_message=msg)
 
         # 3. No tool call at all → the model is done, this is the final answer.
-        if msg.content:
-            return LLMTurn(tool_call=None, answer=msg.content, raw_message=msg)
+        answer = split_think(msg.content or "")[1]
+        if not answer and finish_reason != "length":
+            # Not for output cut off by the token cap: that really is reasoning only.
+            answer = _answer_in_unclosed_think(msg.content or "")
+        if answer:
+            return LLMTurn(tool_call=None, answer=answer, raw_message=msg)
 
         logger.warning(
             "chat_with_tools: empty response. finish_reason=%s, message=%s",
-            choice.finish_reason,
+            finish_reason,
             msg.model_dump_json(),
         )
         raise LLMNoContentException(
             f"LLM returned neither tool calls nor content "
-            f"(finish_reason={choice.finish_reason})"
+            f"(finish_reason={finish_reason})"
         )
 
     def _recover_tool_call_from_content(
@@ -214,15 +345,16 @@ class LLMService:
             raw_message=ChatCompletionMessage(role="assistant", content=content),
         )
 
-    async def generate_answer(
+    async def generate_answer_stream(
         self,
         user_question: str,
         sparql_query: str,
         sparql_results: str | None,
-    ) -> str:
-        """Dedicated final-answer call. Uses the static answer-interpreter prompt
-        (not the schema-heavy query prompt) and is given only the user question,
-        the executed query and its results — no tools available."""
+    ) -> AsyncIterator[tuple[Kind, str]]:
+        """Dedicated final-answer call, streamed as `(kind, delta)` with the kind
+        `thinking` or `answer`. Uses the static answer-interpreter prompt (not the
+        schema-heavy query prompt) and is given only the user question, the executed
+        query and its results — no tools available."""
         user_content = (
             f"User question: {user_question}\n\n"
             f"SPARQL query:\n{sparql_query or '(no query executed)'}\n\n"
@@ -232,21 +364,28 @@ class LLMService:
             {"role": "system", "content": self.answer_system_prompt()},
             {"role": "user", "content": user_content},
         ]
-        try:
-            response: ChatCompletion = await self.client.chat.completions.create(
-                model=self.sparql_model,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens if self.max_tokens is not None else NOT_GIVEN,  # type: ignore
-                messages=messages,  # type: ignore
-            )
-        except Exception as e:
-            raise LLMServiceException(message=str(e)) from e
+        splitter = ThinkSplitter()
+        answered = False
+        async for chunk in self._stream(
+            model=self.sparql_model,
+            temperature=self.temperature,
+            max_tokens=self._max_tokens(),
+            messages=messages,
+        ):
+            delta = chunk.choices[0].delta
+            reasoning = _reasoning(delta)
+            if reasoning:
+                yield "thinking", reasoning
+            if delta.content:
+                for part in splitter.feed(delta.content):
+                    answered = answered or part[0] == "answer"
+                    yield part
+        for part in splitter.flush():
+            answered = answered or part[0] == "answer"
+            yield part
 
-        content = response.choices[0].message.content
-        if content is None:
+        if not answered:
             raise LLMNoContentException("LLM did not generate a final answer")
-        # Strip any <think>…</think> reasoning the model leaked before the answer.
-        return strip_think(content)
 
     async def generate_title(self, question: str) -> str:
         """A short session title for the first question of a session, as one line."""

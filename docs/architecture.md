@@ -54,7 +54,8 @@ Each of these steps reaches the client as an event while it happens.
 `ChatService.run()` does not return a response. It is an async generator that yields the events of
 the turn (`backend/src/models/events.py`) at the moment they happen:
 
-`session` → (`step_started` → `step_finished`)\* → `answer` → `done`
+`session` → (`step_started` → `step_finished`)\* → `answer`+ → `done`, with `thinking` before a
+step or the answer
 
 - **`session`** carries the session ID and the ID of the assistant message.
 - **`session_title`** carries the title of a session that had none. `LLMService.generate_title()`
@@ -106,10 +107,11 @@ Each tool call becomes a step of the kind `resolve_entity`, `sparql_query`, `pre
 
 **How the loop ends:**
 
-- **The LLM stops calling tools.** If it ran queries, a separate `generate_answer()` call writes the
-  final answer from the collected data, using the answer prompt. If it never queried, its own text
-  is the answer.
-- **The iteration limit is reached.** `generate_answer()` forces an answer from whatever data exists.
+- **The LLM stops calling tools.** If it ran queries, a separate `generate_answer_stream()` call
+  writes the final answer from the collected data, using the answer prompt; it is streamed token by
+  token. If it never queried, its own text is the answer, sent in one piece.
+- **The iteration limit is reached.** `generate_answer_stream()` forces an answer from whatever
+  data exists.
 - **The LLM calls `ask_clarification`.** Its question is returned as the normal `answer`; there is
   no separate flag.
 - **`use_previous_results` finds no data.** The step fails and a fixed text is the answer.
@@ -127,13 +129,36 @@ Each tool call becomes a step of the kind `resolve_entity`, `sparql_query`, `pre
   step's error text is the exception message only for a domain exception, otherwise a generic
   "Internal server error". A message that was already stored as `complete` is not changed.
 
+**Streaming:** the rule is *stream for display, parse on the buffer*.
+
+- **Tool loop:** `LLMService.chat_with_tools()` is an async generator. It requests a stream, passes
+  on only the reasoning while it is written (`util/think_splitter.py` routes the deltas and holds
+  back a tag that is split across two of them) and buffers everything else: text may turn out to
+  be a text-encoded tool call or the final answer. At the end the complete message is rebuilt
+  (tool-call fragments are joined by index) and the tool detection runs on it exactly as it would
+  on a non-streamed response. Its last item is the `LLMTurn`. `LLM_STREAM_TOOL_LOOP=false` makes
+  the loop calls plain requests, for servers that parse tool calls less reliably when streaming.
+- **Answer:** `generate_answer_stream()` yields `(kind, delta)` with the kind `thinking` or
+  `answer`; no tool parsing is involved.
+- **Storing reasoning:** the reasoning before a tool call is stored with that step
+  (`steps.thinking`); the reasoning after the last step (the loop's last call plus the answer
+  call) with the message (`messages.thinking`). `PERSIST_THINKING=false` skips both; the events are
+  still sent. Reasoning that only ends with a lone `</think>` cannot be recognized while streaming;
+  `split_think()` separates it on the complete text before the message is stored.
+- **Abort:** a turn that is cancelled mid-answer is stored as `aborted` with the answer text and
+  the reasoning written so far.
+
 **Model quirks:**
 
 - **Tool calls as plain text:** some models send tool calls as text (XML, JSON, fenced). `LLMService`
   recovers these.
-- **Reasoning in the answer:** `generate_answer()` strips `<think>…</think>` blocks. When the model
-  answers directly without any tool, the raw text including `<think>` is returned. The frontend
-  splits this off into a collapsible "Reasoning" section.
+- **Dropped `</think>`:** Blablador (MiniMax) drops the closing tag when a request with tools is
+  streamed. An answer written without tools then sits inside a block that never ends. `LLMService`
+  takes the text after the blank-line gap the tag leaves behind as the answer, so the turn does not
+  fail, but the live reasoning then contains the answer text too. Set `LLM_STREAM_TOOL_LOOP=false`
+  for this server.
+- **Reasoning:** `<think>…</think>` blocks (and a separate `reasoning_content` field, if the server
+  uses one) are separated from the output and sent as `thinking` events; see Streaming below.
 
 ## Persistence
 
@@ -179,5 +204,6 @@ The API maps domain exceptions to status codes and returns
 
 ## What's next
 
-The rest of the move to a streamed response (SSE): answer tokens and thinking as they are
-generated, and the steps shown in the frontend. See [plans/streaming-rework.md](./plans/streaming-rework.md).
+The move to a streamed response (SSE) is complete; the plan and its tickets are in
+[plans/streaming-rework.md](./plans/streaming-rework.md) and
+[plans/backend-rework/](./plans/backend-rework/README.md).

@@ -16,6 +16,7 @@ from src.models.events import (
     StepFinishedEvent,
     StepKind,
     StepStartedEvent,
+    ThinkingEvent,
 )
 from src.models.schemas import ModelResponse, FullTable, FullTableResponse
 from src.util.sparql_utils import (
@@ -28,13 +29,14 @@ from src.util.sparql_utils import (
 )
 from src.db.models import Message
 from src.db.repository import ChatRepository, reusable_data
-from src.services.llm_service import LLMService, ToolCallResult
+from src.services.llm_service import LLMService, LLMTurn, ToolCallResult
 from src.services.sparql_service import SparqlService
 from src.services.lucene_service import LuceneService
 from src.util.exceptions import AppException, SessionNotFoundException, SparqlQueryException
 from src.util.config import Settings
 from src.util.logger import logger
 from src.util.llm_utils import load_tools, load_prompt
+from src.util.think_splitter import split_think
 
 TOOLS: list[dict[str, Any]] = load_tools()
 
@@ -74,6 +76,9 @@ class TurnState:
     keeps it up to date, so the caller can still store a turn that was cut off."""
     message_id: uuid.UUID | None = None
     answer: str = ""
+    # The reasoning that belongs to the message: what was written since the last
+    # step (a step takes the reasoning before it along). Stays empty when reasoning
+    # is not stored (`persist_thinking`).
     thinking: str = ""
 
 
@@ -316,7 +321,16 @@ class ChatService:
                 if title_event is not None:
                     yield title_event
 
-            turn = await self.llm.chat_with_tools(messages, TOOLS)
+            # The reasoning of this call is passed on while it is written; the call's
+            # last item is what the model decided.
+            turn: LLMTurn | None = None
+            async for item in self.llm.chat_with_tools(messages, TOOLS):
+                if isinstance(item, LLMTurn):
+                    turn = item
+                else:
+                    self._keep_thinking(state, item)
+                    yield ThinkingEvent(delta=item)
+            assert turn is not None
 
             # Model stopped calling tools → data gathering is done. Produce the
             # final answer with the dedicated answer prompt rather than using the
@@ -332,7 +346,15 @@ class ChatService:
 
             ordinal += 1
             kind, args = self._plan_step(tc, turn_map)
-            step_id = await repo.start_step(message_id, ordinal=ordinal, kind=kind, args=args)
+            # The reasoning so far led to this tool call: it is stored with the step.
+            step_id = await repo.start_step(
+                message_id,
+                ordinal=ordinal,
+                kind=kind,
+                args=args,
+                thinking=state.thinking.strip() or None,
+            )
+            state.thinking = ""
             yield StepStartedEvent(step_id=step_id, ordinal=ordinal, kind=kind, args=args)
 
             started = time.monotonic()
@@ -382,13 +404,36 @@ class ChatService:
                 f"Tool loop hit max iterations ({self.settings.chat_max_tool_iterations}); forcing final answer"
             )
 
-        # 6. Final answer
+        # 6. Final answer: streamed from the answer call, or the fixed / loop text
+        #    in one piece.
         if answer is None:
-            answer = await self.llm.generate_answer(message, last_query, last_results)
-        state.answer = answer
-        yield AnswerEvent(delta=answer)
+            if state.thinking:
+                # The answer call's reasoning follows that of the loop's last call.
+                state.thinking = state.thinking.rstrip() + "\n\n"
+            async for kind, delta in self.llm.generate_answer_stream(
+                message, last_query, last_results
+            ):
+                if kind == "thinking":
+                    self._keep_thinking(state, delta)
+                    yield ThinkingEvent(delta=delta)
+                else:
+                    state.answer += delta
+                    yield AnswerEvent(delta=delta)
+        else:
+            state.answer = answer
+            yield AnswerEvent(delta=answer)
 
-        await repo.complete_turn(session_id, message_id, content=answer, thinking=None)
+        # Reasoning that only ended with a lone </think> went out as answer text;
+        # it is split off before the message is stored.
+        late_thinking, content = split_think(state.answer)
+        if not self.settings.persist_thinking:
+            late_thinking = None
+        thinking = "\n\n".join(
+            part for part in (state.thinking.strip(), late_thinking) if part
+        )
+        await repo.complete_turn(
+            session_id, message_id, content=content, thinking=thinking or None
+        )
 
         # A title that is still being generated is waited for (with a timeout), so
         # `session_title` always comes before `done`.
@@ -397,6 +442,11 @@ class ChatService:
             if title_event is not None:
                 yield title_event
         yield DoneEvent(message_id=message_id, row_count=row_count)
+
+    def _keep_thinking(self, state: TurnState, delta: str) -> None:
+        """Collect reasoning for storage, unless that is switched off."""
+        if self.settings.persist_thinking:
+            state.thinking += delta
 
     async def _generate_title(self, question: str) -> str | None:
         """The generated title, or None if the call failed. Never raises: a title

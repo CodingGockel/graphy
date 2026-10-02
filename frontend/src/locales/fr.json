@@ -65,6 +65,30 @@
     "sessionGone": "Cette session n’existe plus.",
     "details": "Détails"
   },
+  "trace": {
+    "kind": {
+      "resolve_entity": "Recherche d’entité",
+      "sparql_query": "Requête SPARQL",
+      "previous_results": "Résultats précédents",
+      "papers": "Documents chargés",
+      "clarification": "Question de précision"
+    },
+    "failed": "échec",
+    "cancelled": "annulé",
+    "rows_one": "{count} ligne",
+    "rows_other": "{count} lignes",
+    "candidates_one": "{count} candidat",
+    "candidates_other": "{count} candidats",
+    "query": "Requête",
+    "result": "Résultat",
+    "term": "Terme recherché",
+    "type": "Type",
+    "turn": "Résultats de la question {turn} de cette session",
+    "rowsShown": "{shown} sur {total} lignes",
+    "empty": "Aucun résultat.",
+    "loading": "Chargement du résultat …",
+    "loadFailed": "Le résultat n’a pas pu être chargé."
+  },
   "errors": {
     "network": "Le backend est injoignable.",
     "unavailable": "Un service requis est actuellement indisponible.",

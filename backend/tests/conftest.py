@@ -16,6 +16,9 @@ def settings_stub() -> SimpleNamespace:
         graphdb_base_url="http://graphdb.test",
         graphdb_repository="testrepo",
         sparql_timeout=30.0,
+        # Off by default: most tests mock a plain (non-streamed) completion.
+        llm_stream_tool_loop=False,
+        persist_thinking=True,
         chat_history_depth=5,
         chat_max_tool_iterations=5,
         system_prompt_path="dummy_system.md",

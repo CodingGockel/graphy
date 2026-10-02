@@ -65,6 +65,30 @@
     "sessionGone": "Diese Session existiert nicht mehr.",
     "details": "Details"
   },
+  "trace": {
+    "kind": {
+      "resolve_entity": "Entity-Suche",
+      "sparql_query": "SPARQL-Abfrage",
+      "previous_results": "Frühere Ergebnisse",
+      "papers": "Dokumente geladen",
+      "clarification": "Rückfrage"
+    },
+    "failed": "fehlgeschlagen",
+    "cancelled": "abgebrochen",
+    "rows_one": "{count} Zeile",
+    "rows_other": "{count} Zeilen",
+    "candidates_one": "{count} Kandidat",
+    "candidates_other": "{count} Kandidaten",
+    "query": "Abfrage",
+    "result": "Ergebnis",
+    "term": "Suchbegriff",
+    "type": "Typ",
+    "turn": "Ergebnisse aus Frage {turn} dieser Session",
+    "rowsShown": "{shown} von {total} Zeilen",
+    "empty": "Kein Ergebnis.",
+    "loading": "Lade Ergebnis …",
+    "loadFailed": "Das Ergebnis konnte nicht geladen werden."
+  },
   "errors": {
     "network": "Das Backend ist nicht erreichbar.",
     "unavailable": "Ein benötigter Dienst ist gerade nicht erreichbar.",
