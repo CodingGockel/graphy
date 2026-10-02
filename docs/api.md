@@ -7,7 +7,6 @@ Base URL: `/api/v1` (locally `http://localhost:8000/api/v1`). Schemas live in
 |--------|------|---------|
 | `POST` | `/chat` | Ask a question (creates a session if needed). |
 | `GET` | `/session/{id}/history` | Full history of a session. |
-| `PUT` | `/session/{id}/history` | Replace a session's history (import). |
 | `DELETE` | `/session/{id}` | Delete a session. |
 | `GET` | `/health` | Status of GraphDB and the LLM API. |
 | `GET` | `/chat/models` | Models available on the LLM API. |
@@ -77,14 +76,12 @@ Runs the fixed query from `FULL_TABLE_QUERY_PATH` (no LLM) and returns
 `404` if the session doesn't exist. The frontend uses this both to open a session and to validate
 "Add session".
 
-### `PUT /session/{id}/history`
-
-Replaces the whole history with `{ "messages": [HistoryMessage, …] }` and creates the session if
-needed. `created_at` is ignored. Meant for import; not part of the normal chat flow.
+`sparql_query` and `sparql_results` come from the turn's last successful query step and are `null`
+when the turn ran no query of its own (also when it only reused an earlier turn's results).
 
 ### `DELETE /session/{id}`
 
-Deletes the session and its messages. `204`, or `404` if unknown.
+Deletes the session with its messages and steps. `204`, or `404` if unknown.
 
 ## Health
 

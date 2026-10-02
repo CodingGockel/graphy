@@ -10,7 +10,7 @@ answers in natural language. The LLM drives this itself by calling tools in a lo
 | Frontend | Vue 3 + Vite | Chat UI, session sidebar, settings, service status. See [Frontend](./frontend.md). |
 | Backend | FastAPI | Runs the LLM tool loop, executes SPARQL, stores chat history. |
 | Knowledge graph | GraphDB | Holds the RDF data, answers SPARQL, provides the Lucene full-text index. |
-| Database | PostgreSQL | Sessions and their messages. |
+| Database | PostgreSQL | Sessions, their messages and the tool steps of each answer. |
 | LLM | Blablador (OpenAI-compatible) | Picks tools, writes SPARQL, writes the answer. |
 
 ## Backend layout
@@ -27,9 +27,9 @@ Requests flow **router → service → LLMService / SparqlService / LuceneServic
 | `services/llm_service.py` | Wraps the OpenAI client: tool-calling turns and the final answer call. |
 | `services/sparql_service.py` | Runs SPARQL over HTTP against GraphDB. |
 | `services/lucene_service.py` | Entity lookup in the Lucene index (`resolve_entity`). |
-| `services/session_service.py` | Read, replace and delete a session's history. |
+| `services/session_service.py` | Read and delete a session's history. |
 | `services/build_prompt.py`, `lucene_setup.py` | Standalone CLIs to build the prompts and the Lucene index (see [Knowledge graph](./knowledge-graph.md)). |
-| `db/` | Async SQLAlchemy: `models.py` (`Session`, `Message`), `repository.py`, `database.py`. |
+| `db/` | Async SQLAlchemy: `models.py` (`ChatSession`, `Message`, `Step`), `repository.py`, `database.py`. |
 | `resources/` | Prompts and templates, tool definitions, schema queries, Lucene connector, fixed queries. |
 
 ## A chat request
@@ -37,9 +37,10 @@ Requests flow **router → service → LLMService / SparqlService / LuceneServic
 `POST /api/v1/chat` with `{ message, session_id }`:
 
 1. **Session:** if `session_id` is missing *or unknown*, a new session is created.
-2. **History:** the last `CHAT_HISTORY_DEPTH` turns are loaded from PostgreSQL.
+2. **History:** the last `CHAT_HISTORY_DEPTH` complete turns are loaded from PostgreSQL.
 3. **Tool loop:** the LLM works on the question (below).
-4. **Persist:** the user message and the answer (plus the last query and its results) are stored.
+4. **Persist:** the user message is stored before the loop, the answer after it, with the last
+   executed query and its results as a step.
 5. **Response:** `answer`, `session_id`, `llm_generated_query`, `sparql_query_result`.
 
 ## The tool loop
@@ -82,8 +83,31 @@ JSON files in `backend/src/resources/llm_tools/`.
 ## Persistence
 
 `init_db()` creates the tables at startup (`Base.metadata.create_all`). It does not alter existing
-tables, and there are no migrations yet. Each message row stores `role` and `content`, plus at most
-one `sparql_query` / `sparql_results`. When a turn runs several queries, only the last one is kept.
+tables, and there are no migrations yet: after a schema change the database has to be recreated
+(see [Setup](./setup.md#1-database)).
+
+| Table | Holds |
+|-------|-------|
+| `sessions` | `id`, `title` (+ `title_is_manual`), `created_at`, `updated_at`. |
+| `messages` | One row per user or assistant message: `session_id`, `turn`, `role`, `content`, `thinking`, `status`, `created_at`. |
+| `steps` | One row per tool call of an assistant message: `message_id`, `ordinal`, `kind`, `args`, `thinking`, `ok`, `count`, `result`, `error`, `duration_ms`. |
+
+- **Turns:** a turn is a user message plus the assistant message with the same `turn` number.
+  `(session_id, turn, role)` is unique, so two tabs sending into the same session at once fail
+  loudly instead of mixing up the history.
+- **Status:** an assistant message is `running`, `complete`, `aborted` or `error`; user messages are
+  always `complete`. Only complete turns are sent to the LLM as history.
+- **Steps:** `kind` is `resolve_entity`, `sparql_query`, `previous_results`, `papers` or
+  `clarification`; `(message_id, ordinal)` is unique. `count` is the number of rows or candidates.
+  `result` holds the full result (for a query: the SPARQL JSON) and is never loaded together with
+  the history, only on demand by step ID.
+- **Reusing data:** `use_previous_results` refers to a turn by its `turn` number and gets the result
+  of that turn's last successful `sparql_query` step.
+- **Transactions:** every `ChatRepository` method ends its transaction, reads included.
+
+For now a turn writes a single step, the last query it executed. Storing every tool call as it
+happens comes with the event generator
+([ticket 04](./plans/backend-rework/04-chat-service-generator.md)).
 
 Because history lives on the server, a client only has to remember the `session_id`.
 

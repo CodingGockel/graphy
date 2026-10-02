@@ -23,12 +23,17 @@ docker compose up -d
 This starts a `postgres:16-alpine` container named `db`. Data lives in `database/data/` and survives
 restarts. The backend creates its tables itself on startup; there is no migration step.
 
+> **After a schema change the database must be recreated.** The backend only creates missing
+> tables and never alters existing ones. When an update changes the tables (as the backend rework
+> does), stop the container, delete `database/data/` and start it again. All sessions are lost.
+> `docker compose down -v` is not enough here: the data is a bind mount, not a named volume.
+
 | Command | Effect |
 |---------|--------|
 | `docker compose ps` | Status and health |
 | `docker compose logs -f` | Follow the logs |
 | `docker compose down` | Stop the container (data is kept) |
-| `docker compose down`, then delete `database/data/` | Wipe all sessions and history |
+| `docker compose down`, then delete `database/data/` | Wipe all sessions and history (needed after a schema change) |
 
 ## 2. Backend
 
