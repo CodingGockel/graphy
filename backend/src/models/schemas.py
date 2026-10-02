@@ -54,7 +54,7 @@ class HistoryMessage(BaseModel):
     )
     created_at: Optional[datetime] = Field(
         default=None,
-        description="Server timestamp. Present on read; ignored on upload."
+        description="Server timestamp."
     )
 
 class HistoryResponse(BaseModel):
@@ -63,12 +63,6 @@ class HistoryResponse(BaseModel):
     )
     messages: list[HistoryMessage] = Field(
         description="Full chronological message history of the session."
-    )
-
-class HistoryUpload(BaseModel):
-    messages: list[HistoryMessage] = Field(
-        description="Messages to store, replacing the session's existing history. "
-        "created_at is ignored; order is preserved as given."
     )
 
 class ServiceHealth(BaseModel):

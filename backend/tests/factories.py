@@ -1,4 +1,5 @@
 """Small builders for mocking the OpenAI client surface and DB rows in unit tests."""
+import uuid
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -30,18 +31,47 @@ def make_models(*ids: str) -> SimpleNamespace:
     return SimpleNamespace(data=[SimpleNamespace(id=i) for i in ids])
 
 
+def make_db_step(
+    kind: str = "sparql_query",
+    args=None,
+    ok=True,
+    count=None,
+    ordinal: int = 1,
+    error=None,
+    thinking=None,
+    duration_ms=None,
+    step_id=None,
+) -> MagicMock:
+    """Mimic a `src.db.models.Step` ORM row (without its deferred `result`)."""
+    s = MagicMock()
+    s.id = step_id or uuid.uuid4()
+    s.ordinal = ordinal
+    s.kind = kind
+    s.args = args if args is not None else {}
+    s.thinking = thinking
+    s.ok = ok
+    s.count = count
+    s.error = error
+    s.duration_ms = duration_ms
+    return s
+
+
 def make_db_message(
     role: str,
     content: str,
-    sparql_query=None,
-    sparql_results=None,
+    turn: int = 1,
+    status: str = "complete",
+    steps=None,
     created_at=None,
 ) -> MagicMock:
     """Mimic a `src.db.models.Message` ORM row."""
     m = MagicMock()
+    m.id = uuid.uuid4()
     m.role = role
     m.content = content
-    m.sparql_query = sparql_query
-    m.sparql_results = sparql_results
+    m.turn = turn
+    m.status = status
+    m.thinking = None
+    m.steps = steps if steps is not None else []
     m.created_at = created_at
     return m

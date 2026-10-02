@@ -1,15 +1,36 @@
 import uuid
+from typing import Any
 
-from sqlalchemy import select, delete
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from src.db.models import ChatSession, Message
-from src.models.schemas import HistoryMessage
+from src.db.models import ChatSession, Message, Step
+
+
+def last_query_step(message: Message) -> Step | None:
+    """The last successful `sparql_query` step of an assistant message: the data a
+    later turn can reuse. Expects `message.steps` to be loaded."""
+    for step in reversed(message.steps):
+        if step.kind == "sparql_query" and step.ok:
+            return step
+    return None
+
+
+def _in_turn_order(messages: list[Message]) -> list[Message]:
+    """Chronological order: by turn, the user message before the assistant message."""
+    return sorted(messages, key=lambda m: (m.turn, m.role != "user"))
 
 
 class ChatRepository:
+    """Every method ends its transaction, reads included: a DB session can live as
+    long as a chat stream, and a read that leaves its transaction open would pin a
+    pooled connection ("idle in transaction") through every LLM call."""
+
     def __init__(self, session: AsyncSession):
         self._session = session
+
+    # --- sessions ---------------------------------------------------------
 
     async def create_session(self) -> uuid.UUID:
         chat_session = ChatSession(id=uuid.uuid4())
@@ -21,80 +42,179 @@ class ChatRepository:
         result = await self._session.execute(
             select(ChatSession.id).where(ChatSession.id == session_id)
         )
-        return result.scalar_one_or_none() is not None
-
-    async def save_message(
-        self,
-        session_id: uuid.UUID,
-        role: str,
-        content: str,
-        sparql_query: str | None = None,
-        sparql_results: str | None = None,
-    ) -> None:
-        msg = Message(
-            session_id=session_id,
-            role=role,
-            content=content,
-            sparql_query=sparql_query,
-            sparql_results=sparql_results,
-        )
-        self._session.add(msg)
+        exists = result.scalar_one_or_none() is not None
         await self._session.commit()
+        return exists
 
-    async def get_history(
-        self, session_id: uuid.UUID, limit: int = 10
-    ) -> list[Message]:
+    async def get_sessions(self, session_ids: list[uuid.UUID]) -> list[ChatSession]:
+        """The sessions with the given ids, most recently updated first. Unknown ids
+        are simply missing from the result."""
+        if not session_ids:
+            return []
         result = await self._session.execute(
-            select(Message)
-            .where(Message.session_id == session_id)
-            .order_by(Message.id.desc())
-            .limit(limit * 2)
+            select(ChatSession)
+            .where(ChatSession.id.in_(session_ids))
+            .order_by(ChatSession.updated_at.desc())
         )
-        messages = list(result.scalars().all())
-        messages.reverse()
-        return messages
+        sessions = list(result.scalars().all())
+        await self._session.commit()
+        return sessions
 
-    async def get_full_history(self, session_id: uuid.UUID) -> list[Message]:
-        """All messages of a session in stable chronological (insertion) order."""
+    async def set_title(self, session_id: uuid.UUID, title: str, manual: bool) -> bool:
+        """Set the session title. Returns whether a session with that id existed."""
         result = await self._session.execute(
-            select(Message)
-            .where(Message.session_id == session_id)
-            .order_by(Message.id.asc())
+            update(ChatSession)
+            .where(ChatSession.id == session_id)
+            .values(title=title, title_is_manual=manual)
         )
-        return list(result.scalars().all())
+        await self._session.commit()
+        return result.rowcount > 0  # type: ignore
 
-    async def ensure_session(self, session_id: uuid.UUID) -> None:
-        """Create a session row with the given id if it doesn't exist yet."""
-        if not await self.session_exists(session_id):
-            self._session.add(ChatSession(id=session_id))
-            await self._session.commit()
-
-    async def replace_history(
-        self, session_id: uuid.UUID, messages: list[HistoryMessage]
-    ) -> None:
-        """Replace all messages of a session with the given list, creating the
-        session if it does not exist. Insertion order defines chronology."""
-        await self.ensure_session(session_id)
+    async def touch_session(self, session_id: uuid.UUID) -> None:
+        """Bump `updated_at` (the sidebar sorts by it)."""
         await self._session.execute(
-            delete(Message).where(Message.session_id == session_id)
+            update(ChatSession)
+            .where(ChatSession.id == session_id)
+            .values(updated_at=func.now())
         )
-        for m in messages:
-            self._session.add(
-                Message(
-                    session_id=session_id,
-                    role=m.role,
-                    content=m.content,
-                    sparql_query=m.sparql_query,
-                    sparql_results=m.sparql_results,
-                )
-            )
         await self._session.commit()
 
     async def delete_session(self, session_id: uuid.UUID) -> bool:
-        """Delete the session row (cascade removes its messages). Returns whether
-        a session with that id existed."""
+        """Delete the session row (cascade removes its messages and their steps).
+        Returns whether a session with that id existed."""
         result = await self._session.execute(
             delete(ChatSession).where(ChatSession.id == session_id)
         )
         await self._session.commit()
-        return result.rowcount > 0 #type: ignore
+        return result.rowcount > 0  # type: ignore
+
+    # --- messages ---------------------------------------------------------
+
+    async def next_turn(self, session_id: uuid.UUID) -> int:
+        result = await self._session.execute(
+            select(func.coalesce(func.max(Message.turn), 0)).where(
+                Message.session_id == session_id
+            )
+        )
+        turn = result.scalar_one() + 1
+        await self._session.commit()
+        return turn
+
+    async def add_message(
+        self,
+        session_id: uuid.UUID,
+        turn: int,
+        role: str,
+        content: str,
+        status: str,
+    ) -> uuid.UUID:
+        message = Message(
+            id=uuid.uuid4(),
+            session_id=session_id,
+            turn=turn,
+            role=role,
+            content=content,
+            status=status,
+        )
+        self._session.add(message)
+        await self._session.commit()
+        return message.id
+
+    async def finish_message(
+        self,
+        message_id: uuid.UUID,
+        content: str,
+        thinking: str | None,
+        status: str,
+    ) -> None:
+        await self._session.execute(
+            update(Message)
+            .where(Message.id == message_id)
+            .values(content=content, thinking=thinking, status=status)
+        )
+        await self._session.commit()
+
+    # --- steps ------------------------------------------------------------
+
+    async def start_step(
+        self,
+        message_id: uuid.UUID,
+        ordinal: int,
+        kind: str,
+        args: dict[str, Any],
+        thinking: str | None = None,
+    ) -> uuid.UUID:
+        step = Step(
+            id=uuid.uuid4(),
+            message_id=message_id,
+            ordinal=ordinal,
+            kind=kind,
+            args=args,
+            thinking=thinking,
+        )
+        self._session.add(step)
+        await self._session.commit()
+        return step.id
+
+    async def finish_step(
+        self,
+        step_id: uuid.UUID,
+        ok: bool,
+        count: int | None,
+        result: Any | None,
+        error: str | None,
+        duration_ms: int,
+    ) -> None:
+        await self._session.execute(
+            update(Step)
+            .where(Step.id == step_id)
+            .values(ok=ok, count=count, result=result, error=error, duration_ms=duration_ms)
+        )
+        await self._session.commit()
+
+    async def get_step_result(self, step_id: uuid.UUID) -> tuple[str, Any] | None:
+        """`(kind, result)` of a step, or None if there is no such step. The only
+        place a step result is read."""
+        result = await self._session.execute(
+            select(Step.kind, Step.result).where(Step.id == step_id)
+        )
+        row = result.one_or_none()
+        await self._session.commit()
+        return (row[0], row[1]) if row is not None else None
+
+    # --- reads ------------------------------------------------------------
+
+    async def get_history(self, session_id: uuid.UUID, turns: int) -> list[Message]:
+        """The messages of the last `turns` complete turns (assistant message with
+        status `complete`) in chronological order, with their steps but without the
+        step results."""
+        complete_turns = (
+            select(Message.turn)
+            .where(
+                Message.session_id == session_id,
+                Message.role == "assistant",
+                Message.status == "complete",
+            )
+            .order_by(Message.turn.desc())
+            .limit(turns)
+        )
+        result = await self._session.execute(
+            select(Message)
+            .where(Message.session_id == session_id, Message.turn.in_(complete_turns))
+            .options(selectinload(Message.steps))
+        )
+        messages = list(result.scalars().all())
+        await self._session.commit()
+        return _in_turn_order(messages)
+
+    async def get_full_history(self, session_id: uuid.UUID) -> list[Message]:
+        """All messages of a session in chronological order, with their steps but
+        without the step results."""
+        result = await self._session.execute(
+            select(Message)
+            .where(Message.session_id == session_id)
+            .options(selectinload(Message.steps))
+        )
+        messages = list(result.scalars().all())
+        await self._session.commit()
+        return _in_turn_order(messages)

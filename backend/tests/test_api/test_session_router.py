@@ -39,24 +39,16 @@ class TestGetHistory:
         assert resp.status_code == 404
 
 
-class TestReplaceHistory:
-    def test_returns_updated_history(self, client):
-        service = _override_session_service()
-        sid = uuid.uuid4()
-        service.replace_history = AsyncMock(
-            return_value=HistoryResponse(
-                session_id=sid,
-                messages=[HistoryMessage(role="user", content="new")],
-            )
-        )
+class TestReplaceHistoryRemoved:
+    def test_put_history_is_gone(self, client):
+        _override_session_service()
 
         resp = client.put(
-            f"/api/v1/session/{sid}/history",
+            f"/api/v1/session/{uuid.uuid4()}/history",
             json={"messages": [{"role": "user", "content": "new"}]},
         )
 
-        assert resp.status_code == 200
-        assert resp.json()["messages"][0]["content"] == "new"
+        assert resp.status_code == 405
 
 
 class TestDeleteSession:

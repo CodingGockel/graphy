@@ -45,6 +45,28 @@ def parse_sparql_bindings(raw_json: str, columns: list[str]) -> dict[str, Any]:
     return {"columns": columns, "rows": rows}
 
 
+def results_to_json(raw: str) -> Any:
+    """Parse a raw SPARQL JSON result for storage in a JSON column. Text that is not
+    JSON is kept as a plain string (also a valid JSON value)."""
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return raw
+
+
+def results_to_text(stored: Any) -> str:
+    """Inverse of results_to_json: the stored value as the JSON text the LLM gets."""
+    return stored if isinstance(stored, str) else json.dumps(stored)
+
+
+def count_rows(results: Any) -> int | None:
+    """Number of bindings in a parsed SPARQL JSON result; None if it has none (ASK)."""
+    if not isinstance(results, dict):
+        return None
+    bindings = (results.get("results") or {}).get("bindings")
+    return len(bindings) if isinstance(bindings, list) else None
+
+
 def strip_think(text: str) -> str:
     """Remove <think>...</think> reasoning blocks that some models emit before their
     actual output. Used for both query extraction and the final natural-language answer."""

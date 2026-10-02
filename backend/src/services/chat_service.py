@@ -1,13 +1,22 @@
 import json
+import time
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.schemas import ChatRequest, ChatResponse, ModelResponse, FullTable, FullTableResponse
-from src.util.sparql_utils import ensure_limit, extract_sparql_query, parse_sparql_bindings
+from src.util.sparql_utils import (
+    count_rows,
+    ensure_limit,
+    parse_sparql_bindings,
+    results_to_json,
+    results_to_text,
+)
 from src.db.models import Message
-from src.db.repository import ChatRepository
+from src.db.repository import ChatRepository, last_query_step
 from src.services.llm_service import LLMService, ToolCallResult
 from src.services.sparql_service import SparqlService
 from src.services.lucene_service import LuceneService
@@ -18,24 +27,42 @@ from src.util.llm_utils import load_tools, load_prompt
 
 TOOLS: list[dict[str, Any]] = load_tools()
 
+@dataclass
+class TurnData:
+    """Reusable data of an earlier turn: its last successful query step. The result
+    itself is only loaded (by step id) when use_previous_results asks for it."""
+    step_id: uuid.UUID
+    query: str
+
+
 def _build_history(
     messages: list[Message],
-) -> tuple[list[dict[str, str]], dict[int, Message]]:
-    """Convert DB messages into LLM message dicts and a turn->Message map for data reuse."""
+) -> tuple[list[dict[str, str]], dict[int, TurnData]]:
+    """Convert DB messages into LLM message dicts and a turn->TurnData map for data
+    reuse, keyed on `messages.turn` (stable even once the history depth is exceeded)."""
     llm_messages: list[dict[str, str]] = []
-    turn_map: dict[int, Message] = {}
-    turn = 0
+    turn_map: dict[int, TurnData] = {}
 
     for msg in messages:
         if msg.role == "user":
-            turn += 1
             llm_messages.append({"role": "user", "content": msg.content})
         elif msg.role == "assistant":
             llm_messages.append({"role": "assistant", "content": msg.content})
-            if msg.sparql_results:
-                turn_map[turn] = msg
+            step = last_query_step(msg)
+            if step is not None:
+                turn_map[msg.turn] = TurnData(
+                    step_id=step.id, query=step.args.get("query", "")
+                )
 
     return llm_messages, turn_map
+
+
+@dataclass
+class ExecutedQuery:
+    """The last query a turn executed itself, kept until the turn is persisted."""
+    query: str
+    results: str
+    duration_ms: int
 
 
 def _truncate_results(raw: str, max_rows: int = 30) -> str:
@@ -74,7 +101,7 @@ def _format_candidates(term: str, candidates: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _available_data_note(turn_map: dict[int, Message]) -> str:
+def _available_data_note(turn_map: dict[int, TurnData]) -> str:
     if not turn_map:
         return ""
     lines = [
@@ -82,8 +109,8 @@ def _available_data_note(turn_map: dict[int, Message]) -> str:
         "The following turns have SPARQL results that can be reused "
         "with the use_previous_results tool:\n",
     ]
-    for turn_num, msg in sorted(turn_map.items()):
-        query_snippet = (msg.sparql_query or "")[:120]
+    for turn_num, data in sorted(turn_map.items()):
+        query_snippet = data.query[:120]
         lines.append(f"- Turn {turn_num}: {query_snippet}...")
     return "\n".join(lines)
 
@@ -146,15 +173,21 @@ class ChatService:
         else:
             session_id = request.session_id
 
-        # 2. Load history (last N turns) and the reusable-data map
+        # 2. Load history (last N complete turns) and the reusable-data map
         depth = self.settings.chat_history_depth
-        history_msgs = await self.repo.get_history(session_id, limit=depth)
+        history_msgs = await self.repo.get_history(session_id, turns=depth)
         history, turn_map = _build_history(history_msgs)
 
         # 3. Persist the user message
-        await self.repo.save_message(
-            session_id=session_id, role="user", content=request.message
+        turn_number = await self.repo.next_turn(session_id)
+        await self.repo.add_message(
+            session_id=session_id,
+            turn=turn_number,
+            role="user",
+            content=request.message,
+            status="complete",
         )
+        turn_ref = (session_id, turn_number)
 
         # 4. Seed the conversation for the agentic loop
         system_prompt = self.llm.query_system_prompt() + _available_data_note(turn_map)
@@ -166,9 +199,11 @@ class ChatService:
 
         # 5. Agentic loop: the model may run several queries (and inspect their
         #    results) before producing a final answer. Track the most recent
-        #    query/results for the response payload.
+        #    query/results for the response payload, and the last query this turn
+        #    executed itself: that one is persisted as the turn's step.
         last_query = ""
         last_results: str | None = None
+        executed: ExecutedQuery | None = None
 
         for iteration in range(self.settings.chat_max_tool_iterations):
             turn = await self.llm.chat_with_tools(messages, TOOLS)
@@ -180,24 +215,27 @@ class ChatService:
             if turn.tool_call is None:
                 if last_results is None:
                     return await self._finalize(
-                        session_id, turn.answer or "", last_query, last_results
+                        turn_ref, turn.answer or "", last_query, last_results, executed
                     )
                 answer = await self.llm.generate_answer(
                     request.message, last_query, last_results
                 )
-                return await self._finalize(session_id, answer, last_query, last_results)
+                return await self._finalize(
+                    turn_ref, answer, last_query, last_results, executed
+                )
 
             tc = turn.tool_call
             logger.info(f"Iteration {iteration + 1}: LLM chose tool '{tc.name}'")
 
             if tc.name == "ask_clarification":
-                return await self._handle_clarification(session_id, tc)
+                return await self._handle_clarification(turn_ref, tc)
 
             if tc.name == "execute_sparql_query":
                 # Safety net: cap an unbounded SELECT so a forgotten LIMIT can't blow up
                 # the result payload (and the loop context).
                 query = ensure_limit(tc.arguments.get("query", ""))
                 logger.info(f"Executing SPARQL query: {query}")
+                started = time.monotonic()
                 try:
                     results = await self.sparql.execute(query)
                 except SparqlQueryException as e:
@@ -215,6 +253,11 @@ class ChatService:
                 # Keep the full results for the final answer; feed only a truncated
                 # sample back into the loop transcript.
                 last_query, last_results = query, results
+                executed = ExecutedQuery(
+                    query=query,
+                    results=results,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                )
                 self._append_tool_exchange(messages, tc, _truncate_results(results))
                 continue
 
@@ -244,14 +287,13 @@ class ChatService:
                 continue
 
             if tc.name == "use_previous_results":
-                ref_msg = self._resolve_ref(tc, turn_map)
-                if ref_msg is None:
-                    return await self._no_previous_data(session_id)
-                last_query = ref_msg.sparql_query or last_query
-                last_results = ref_msg.sparql_results or last_results
-                self._append_tool_exchange(
-                    messages, tc, _truncate_results(ref_msg.sparql_results or "")
-                )
+                ref = self._resolve_ref(tc, turn_map)
+                stored = await self.repo.get_step_result(ref.step_id) if ref else None
+                if ref is None or stored is None or stored[1] is None:
+                    return await self._no_previous_data(turn_ref)
+                last_query = ref.query or last_query
+                last_results = results_to_text(stored[1])
+                self._append_tool_exchange(messages, tc, _truncate_results(last_results))
                 continue
 
             if tc.name == "load_phenobs_papers":
@@ -262,7 +304,7 @@ class ChatService:
 
             # Unknown tool name → treat as clarification rather than crash.
             logger.warning(f"Unknown tool call: {tc.name}")
-            return await self._handle_clarification(session_id, tc)
+            return await self._handle_clarification(turn_ref, tc)
 
         # Loop exhausted without a final answer — force one via the answer prompt
         # using whatever data was gathered so far.
@@ -270,7 +312,7 @@ class ChatService:
             f"Tool loop hit max iterations ({self.settings.chat_max_tool_iterations}); forcing final answer"
         )
         answer = await self.llm.generate_answer(request.message, last_query, last_results)
-        return await self._finalize(session_id, answer, last_query, last_results)
+        return await self._finalize(turn_ref, answer, last_query, last_results, executed)
 
     def _append_tool_exchange(
         self, messages: list[dict[str, Any]], tc: ToolCallResult, output: str
@@ -303,8 +345,8 @@ class ChatService:
             )
 
     def _resolve_ref(
-        self, tc: ToolCallResult, turn_map: dict[int, Message]
-    ) -> Message | None:
+        self, tc: ToolCallResult, turn_map: dict[int, TurnData]
+    ) -> TurnData | None:
         """Resolve the turn referenced by use_previous_results, falling back to
         the most recent turn that has data."""
         try:
@@ -312,29 +354,50 @@ class ChatService:
         except (ValueError, TypeError):
             ref_turn = 0
 
-        ref_msg = turn_map.get(ref_turn)
-        if ref_msg is None and turn_map:
+        ref = turn_map.get(ref_turn)
+        if ref is None and turn_map:
             logger.warning(
                 f"use_previous_results referenced turn {ref_turn}, not found. "
                 f"Falling back to latest. Available: {sorted(turn_map.keys())}"
             )
-            ref_msg = turn_map[max(turn_map.keys())]
-        return ref_msg
+            ref = turn_map[max(turn_map.keys())]
+        return ref
 
     async def _finalize(
         self,
-        session_id,
+        turn_ref: tuple[uuid.UUID, int],
         answer: str,
         last_query: str,
         last_results: str | None,
+        executed: ExecutedQuery | None = None,
     ) -> ChatResponse:
-        await self.repo.save_message(
+        """Persist the assistant message of the turn, with one step for the last
+        query the turn executed (only that one survives for now)."""
+        session_id, turn_number = turn_ref
+        message_id = await self.repo.add_message(
             session_id=session_id,
+            turn=turn_number,
             role="assistant",
-            content=answer,
-            sparql_query=last_query or None,
-            sparql_results=last_results,
+            content="",
+            status="running",
         )
+        if executed is not None:
+            result = results_to_json(executed.results)
+            step_id = await self.repo.start_step(
+                message_id, ordinal=1, kind="sparql_query", args={"query": executed.query}
+            )
+            await self.repo.finish_step(
+                step_id,
+                ok=True,
+                count=count_rows(result),
+                result=result,
+                error=None,
+                duration_ms=executed.duration_ms,
+            )
+        await self.repo.finish_message(
+            message_id, content=answer, thinking=None, status="complete"
+        )
+        await self.repo.touch_session(session_id)
         return ChatResponse(
             answer=answer,
             session_id=session_id,
@@ -342,16 +405,18 @@ class ChatService:
             sparql_query_result=last_results,
         )
 
-    async def _no_previous_data(self, session_id) -> ChatResponse:
+    async def _no_previous_data(self, turn_ref: tuple[uuid.UUID, int]) -> ChatResponse:
         answer = (
             "There are no previous query results available to fall back on. "
             "Please ask a new question."
         )
-        return await self._finalize(session_id, answer, "", None)
+        return await self._finalize(turn_ref, answer, "", None)
 
-    async def _handle_clarification(self, session_id, tc: ToolCallResult) -> ChatResponse:
+    async def _handle_clarification(
+        self, turn_ref: tuple[uuid.UUID, int], tc: ToolCallResult
+    ) -> ChatResponse:
         question = tc.arguments.get("question") or "Could you phrase your question more precisely?"
-        return await self._finalize(session_id, question, "", None)
+        return await self._finalize(turn_ref, question, "", None)
 
     async def models(self) -> ModelResponse:
         return await self.llm.get_models()

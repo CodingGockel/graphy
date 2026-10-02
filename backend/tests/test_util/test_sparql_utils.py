@@ -1,7 +1,10 @@
 from src.util.sparql_utils import (
+    count_rows,
     ensure_limit,
     extract_sparql_query,
     parse_sparql_bindings,
+    results_to_json,
+    results_to_text,
     strip_think,
     validate_query,
 )
@@ -41,6 +44,24 @@ class TestParseSparqlBindings:
     def test_no_bindings(self):
         result = parse_sparql_bindings('{"results": {"bindings": []}}', ["x"])
         assert result == {"columns": ["x"], "rows": []}
+
+
+class TestStoredResults:
+    def test_json_round_trip(self, sparql_results_json):
+        stored = results_to_json(sparql_results_json)
+        assert isinstance(stored, dict)
+        assert results_to_json(results_to_text(stored)) == stored
+
+    def test_non_json_text_is_kept_as_string(self):
+        assert results_to_json("not json") == "not json"
+        assert results_to_text("not json") == "not json"
+
+    def test_count_rows(self, sparql_results_json):
+        assert count_rows(results_to_json(sparql_results_json)) == 2
+
+    def test_count_rows_is_none_without_bindings(self):
+        assert count_rows({"head": {}, "boolean": True}) is None
+        assert count_rows("not json") is None
 
 
 class TestEnsureLimit:
