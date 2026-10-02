@@ -6,7 +6,7 @@ export interface ChatRequest {
   session_id: string | null
 }
 
-export type StepKind = 'resolve_entity' | 'sparql_query' | 'previous_results' | 'papers' | 'clarification'
+export type StepKind = 'resolve_entity' | 'sparql_query' | 'previous_results' | 'clarification'
 
 export type ChatErrorKind =
   | 'llm_unavailable'

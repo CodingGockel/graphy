@@ -28,8 +28,6 @@ def settings_stub() -> SimpleNamespace:
         generate_session_titles=False,
         session_title_prompt_path="dummy_title.md",
         session_title_timeout=5.0,
-        full_table_query_path="dummy_table.rq",
-        full_table_columns=["name", "count"],
     )
 
 

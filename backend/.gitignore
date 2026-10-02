@@ -8,4 +8,4 @@ venv/
 swep-venv/
 .pytest_cache/
 .vscode
-/logs
+logs/

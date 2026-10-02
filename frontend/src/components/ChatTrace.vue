@@ -48,7 +48,7 @@ function text(value: unknown): string {
 
 /** A step with nothing to show inside is a plain line instead of a collapsible item. */
 function hasBody(step: StepItem): boolean {
-  return Boolean(step.error) || (step.kind !== 'papers' && step.kind !== 'clarification')
+  return Boolean(step.error) || step.kind !== 'clarification'
 }
 
 function showsResult(step: StepItem): boolean {

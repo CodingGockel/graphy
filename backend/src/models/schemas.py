@@ -42,7 +42,7 @@ class StepOut(BaseModel):
         description="Position of the step within its message, starting at 1."
     )
     kind: str = Field(
-        description="resolve_entity | sparql_query | previous_results | papers | clarification."
+        description="resolve_entity | sparql_query | previous_results | clarification."
     )
     args: dict[str, Any] = Field(
         description="Arguments of the tool call, e.g. the query."
@@ -157,20 +157,6 @@ class HealthResponse(BaseModel):
 class ModelResponse(BaseModel):
     models: set[str] = Field(
         description="Set of model IDs available on the configured LLM API."
-    )
-
-class FullTable(BaseModel):
-    columns: list[str] = Field(
-        description="Ordered column names, as configured in the full_table_columns setting."
-    )
-    rows: list[dict[str, Any]] = Field(
-        description="One object per row, keyed by column name. Numeric cells are coerced "
-        "to int/float based on their SPARQL datatype; missing cells are null."
-    )
-
-class FullTableResponse(BaseModel):
-    full_table: FullTable = Field(
-        description="Predefined tabular view of the knowledge graph (columns + rows)."
     )
 
 class ErrorResponse(BaseModel):

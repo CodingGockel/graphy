@@ -40,10 +40,8 @@ services:
       # GraphDB (external, VPN-gated)
       GRAPHDB_BASE_URL: ${GRAPHDB_BASE_URL}
       GRAPHDB_REPOSITORY: ${GRAPHDB_REPOSITORY}
-      # Prompts / full table
+      # Prompts
       SYSTEM_PROMPT_PATH: ${SYSTEM_PROMPT_PATH}
-      FULL_TABLE_QUERY_PATH: ${FULL_TABLE_QUERY_PATH}
-      FULL_TABLE_COLUMNS: ${FULL_TABLE_COLUMNS}
       # Database — built from the postgres vars so there is a single source of truth.
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       # Chat service

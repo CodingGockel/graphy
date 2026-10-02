@@ -2,48 +2,11 @@ from src.util.sparql_utils import (
     count_rows,
     ensure_limit,
     extract_sparql_query,
-    parse_sparql_bindings,
     results_to_json,
     results_to_text,
     strip_think,
     validate_query,
 )
-
-
-class TestParseSparqlBindings:
-    def test_restricts_and_orders_columns(self, sparql_results_json):
-        result = parse_sparql_bindings(sparql_results_json, ["count", "name"])
-        assert result["columns"] == ["count", "name"]
-        assert list(result["rows"][0].keys()) == ["count", "name"]
-
-    def test_coerces_integer_datatype(self, sparql_results_json):
-        result = parse_sparql_bindings(sparql_results_json, ["name", "count"])
-        assert result["rows"][0] == {"name": "Rose", "count": 5}
-        assert isinstance(result["rows"][0]["count"], int)
-
-    def test_coerces_float_datatype(self):
-        raw = (
-            '{"results": {"bindings": [{"v": {"value": "1.5",'
-            ' "datatype": "http://www.w3.org/2001/XMLSchema#decimal"}}]}}'
-        )
-        result = parse_sparql_bindings(raw, ["v"])
-        assert result["rows"][0]["v"] == 1.5
-
-    def test_missing_cell_is_none(self, sparql_results_json):
-        result = parse_sparql_bindings(sparql_results_json, ["name", "absent"])
-        assert result["rows"][0]["absent"] is None
-
-    def test_unparseable_numeric_falls_back_to_string(self):
-        raw = (
-            '{"results": {"bindings": [{"v": {"value": "not-a-number",'
-            ' "datatype": "http://www.w3.org/2001/XMLSchema#integer"}}]}}'
-        )
-        result = parse_sparql_bindings(raw, ["v"])
-        assert result["rows"][0]["v"] == "not-a-number"
-
-    def test_no_bindings(self):
-        result = parse_sparql_bindings('{"results": {"bindings": []}}', ["x"])
-        assert result == {"columns": ["x"], "rows": []}
 
 
 class TestStoredResults:

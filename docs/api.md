@@ -13,7 +13,6 @@ Base URL: `/api/v1` (locally `http://localhost:8000/api/v1`). Schemas live in
 | `GET` | `/steps/{id}/result` | The result of one tool step. |
 | `GET` | `/health` | Status of GraphDB and the LLM API. |
 | `GET` | `/models` | Models available on the LLM API. |
-| `GET` | `/table` | Fixed tabular view (PhenObs-specific, not used by the frontend). |
 
 **Errors:**
 
@@ -55,7 +54,7 @@ data: {"message_id":"8b0e…","row_count":1}
 |-------|--------|---------|
 | `session` | `session_id`, `message_id`, `title` | Always first. `message_id` is the assistant message; `title` is `null` while the title is still being generated (a `session_title` follows). |
 | `session_title` | `session_id`, `title` | The session got its title. Sent once, on the turn that gives a session its title (normally the first), anywhere after `session` and always before `done`. |
-| `step_started` | `step_id`, `ordinal`, `kind`, `args` | A tool call begins. `kind`: `resolve_entity`, `sparql_query`, `previous_results`, `papers`, `clarification`. |
+| `step_started` | `step_id`, `ordinal`, `kind`, `args` | A tool call begins. `kind`: `resolve_entity`, `sparql_query`, `previous_results`, `clarification`. |
 | `step_finished` | `step_id`, `ok`, `count`, `error`, `duration_ms` | The tool call ended. `count` is the number of rows or candidates; `error` is set when `ok` is `false`. |
 | `thinking` | `delta` | A piece of the model's reasoning, sent while it is written. It belongs to whatever comes next: the following `step_started`, or the answer. Append consecutive deltas. |
 | `answer` | `delta` | A piece of the answer; append the deltas. An answer written from query results arrives token by token; a clarification, a fixed text or an answer without a query is one event. |
@@ -176,17 +175,11 @@ standard SPARQL JSON for `sparql_query`, a list of `{ uri, label, score }` for `
 `null` for every other kind and for a failed step. A `previous_results` step has no result of its
 own; its `args.source_step_id` names the step that holds the data.
 
-## Models and table
+## Models
 
 ### `GET /models`
 
 `{ "models": ["alias-huge", …] }`, or `503` if the LLM API is unreachable.
-
-### `GET /table?limit=N`
-
-Runs the fixed query from `FULL_TABLE_QUERY_PATH` (no LLM) and returns
-`{ "full_table": { "columns": [...], "rows": [{...}] } }`. Numeric cells are typed; missing cells are
-`null`. This endpoint is specific to the PhenObs KG.
 
 ## Health
 

@@ -60,13 +60,6 @@ class Settings(BaseSettings):
     # Canonical prefix->namespace map written by build_prompt.py; used at chat time to
     # repair queries that declare a known prefix with a wrong (hallucinated) namespace.
     schema_prefixes_path: str = "src/resources/schema/prefixes.json"
-    
-    # Full table settings
-    full_table_query_path: str = "src/resources/queries/full_table.rq"
-    full_table_columns: list[str] = [
-        "species", "garden", "city", "country", "lat", "long",
-        "year", "firstFlowerDay", "lastFlowerDay", "floweringDuration",
-    ]
 
     model_config = SettingsConfigDict(
         env_file=".env",

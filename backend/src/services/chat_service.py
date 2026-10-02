@@ -4,7 +4,6 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from src.models.events import (
@@ -18,11 +17,10 @@ from src.models.events import (
     StepStartedEvent,
     ThinkingEvent,
 )
-from src.models.schemas import ModelResponse, FullTable, FullTableResponse
+from src.models.schemas import ModelResponse
 from src.util.sparql_utils import (
     count_rows,
     ensure_limit,
-    parse_sparql_bindings,
     results_to_json,
     results_to_text,
     strip_think,
@@ -35,7 +33,7 @@ from src.services.lucene_service import LuceneService
 from src.util.exceptions import AppException, SessionNotFoundException, SparqlQueryException
 from src.util.config import Settings
 from src.util.logger import logger
-from src.util.llm_utils import load_tools, load_prompt
+from src.util.llm_utils import load_tools
 from src.util.think_splitter import split_think
 
 TOOLS: list[dict[str, Any]] = load_tools()
@@ -60,8 +58,8 @@ def _build_history(
         if msg.role == "user":
             llm_messages.append({"role": "user", "content": msg.content})
         elif msg.role == "assistant":
-            # An answer written without tools is stored with its <think> block
-            # (the frontend shows it); the model must not get it back as history.
+            # Answers are stored without their reasoning; this only catches a
+            # <think> block that is still in the text of an older row.
             llm_messages.append({"role": "assistant", "content": strip_think(msg.content)})
             data = reusable_data(msg)
             if data is not None:
@@ -148,38 +146,6 @@ def _available_data_note(turn_map: dict[int, TurnData]) -> str:
         query_snippet = data.query[:120]
         lines.append(f"- Turn {turn_num}: {query_snippet}...")
     return "\n".join(lines)
-
-
-_PHENOBS_PAPERS_DIR = Path(__file__).resolve().parents[1] / "resources" / "phenobs_papers"
-
-
-def _load_phenobs_papers_content() -> str:
-    """Read every first-page PDF in the phenobs_papers directory and return
-    their text content as a single formatted string."""
-    if not _PHENOBS_PAPERS_DIR.exists():
-        return "No PhenObs papers are available. The phenobs_papers directory does not exist."
-
-    from pypdf import PdfReader
-
-    sections: list[str] = []
-    for pdf_path in sorted(_PHENOBS_PAPERS_DIR.glob("*.pdf")):
-        try:
-            reader = PdfReader(pdf_path)
-            text = reader.pages[0].extract_text() if reader.pages else ""
-            if text.strip():
-                sections.append(f"## {pdf_path.stem}\n\n{text.strip()}")
-            else:
-                sections.append(f"## {pdf_path.stem}\n\n[No extractable text - this may be a poster or scanned image.]")
-        except Exception as exc:
-            sections.append(f"## {pdf_path.stem}\n\n[Error reading PDF: {exc}]")
-
-    if not sections:
-        return "No PhenObs paper PDFs found in the phenobs_papers directory."
-
-    return (
-        f"# PhenObs Scientific Publications (first pages of {len(sections)} papers)\n\n"
-        + "\n\n---\n\n".join(sections)
-    )
 
 
 def _step_error(exc: Exception) -> str:
@@ -546,9 +512,6 @@ class ChatService:
                 args["query"] = ref.query
             return "previous_results", args
 
-        if tc.name == "load_phenobs_papers":
-            return "papers", {}
-
         if tc.name != "ask_clarification":
             # Unknown tool name → treat as clarification rather than crash.
             logger.warning(f"Unknown tool call: {tc.name}")
@@ -637,10 +600,6 @@ class ChatService:
                 results=results,
             )
 
-        if kind == "papers":
-            logger.info("Loading PhenObs paper contents into context")
-            return StepOutcome(ok=True, output=_load_phenobs_papers_content())
-
         return StepOutcome(ok=True, final_answer=args["question"])
 
     def _append_tool_exchange(
@@ -691,12 +650,3 @@ class ChatService:
 
     async def models(self) -> ModelResponse:
         return await self.llm.get_models()
-
-    async def get_full_table(self, limit: int | None) -> FullTableResponse:
-        # No kwargs: the SPARQL query contains literal braces that would break str.format.
-        query = load_prompt(self.settings.full_table_query_path)
-        if limit is not None:
-            query = f"{query.rstrip()}\nLIMIT {int(limit)}"
-        raw_results = await self.sparql.execute(query)
-        table = parse_sparql_bindings(raw_results, self.settings.full_table_columns)
-        return FullTableResponse(full_table=FullTable(**table))

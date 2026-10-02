@@ -9,18 +9,18 @@ Working mode: Claude implements one ticket (code, tests, docs) and stops. Mo run
 
 | # | Ticket | Area | Status |
 |---|--------|------|--------|
-| 01 | [Small fixes](./01-small-fixes.md) | backend | open |
-| 02 | [Data layer: sessions, messages, steps](./02-data-layer.md) | backend | open |
-| 03 | [Chat event types](./03-chat-events.md) | backend | open |
-| 04 | [ChatService as event generator](./04-chat-service-generator.md) | backend | open |
-| 05 | [SSE chat route](./05-sse-chat-route.md) | backend | open |
-| 06 | [Frontend: SSE client](./06-frontend-sse-client.md) | frontend | open |
-| 07 | [Session API](./07-session-api.md) | backend | open |
-| 08 | [Frontend: session endpoints](./08-frontend-sessions.md) | frontend | open |
-| 09 | [Session titles](./09-session-titles.md) | backend + frontend | open |
-| 10 | [Answer token streaming](./10-answer-streaming.md) | backend | open |
-| 11 | [Tool-loop streaming and thinking](./11-tool-loop-streaming.md) | backend | open |
-| 12 | [Frontend: trace (steps and reasoning)](./12-frontend-trace.md) | frontend | open |
+| 01 | [Small fixes](./01-small-fixes.md) | backend | done |
+| 02 | [Data layer: sessions, messages, steps](./02-data-layer.md) | backend | done |
+| 03 | [Chat event types](./03-chat-events.md) | backend | done |
+| 04 | [ChatService as event generator](./04-chat-service-generator.md) | backend | done |
+| 05 | [SSE chat route](./05-sse-chat-route.md) | backend | done |
+| 06 | [Frontend: SSE client](./06-frontend-sse-client.md) | frontend | done |
+| 07 | [Session API](./07-session-api.md) | backend | done |
+| 08 | [Frontend: session endpoints](./08-frontend-sessions.md) | frontend | done |
+| 09 | [Session titles](./09-session-titles.md) | backend + frontend | done |
+| 10 | [Answer token streaming](./10-answer-streaming.md) | backend | done |
+| 11 | [Tool-loop streaming and thinking](./11-tool-loop-streaming.md) | backend | done |
+| 12 | [Frontend: trace (steps and reasoning)](./12-frontend-trace.md) | frontend | done |
 
 The app stays runnable after every ticket, with two pairs that must land together because the
 backend contract changes under the frontend: **05 + 06** and **07 + 08**. Ticket 12 only needs

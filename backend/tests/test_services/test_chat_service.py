@@ -654,27 +654,6 @@ class TestUsePreviousResults:
         assert "Turn 7: SELECT ?old {}" in system_prompt
 
 
-class TestPapers:
-    async def test_papers_step_has_no_result(self, chat_service, repo, mocker):
-        service, llm, _, _ = chat_service
-        mocker.patch(
-            "src.services.chat_service._load_phenobs_papers_content", return_value="PAPERS"
-        )
-        llm.chat_with_tools.side_effect = [
-            _tool_turn("load_phenobs_papers", {}),
-            _answer_turn("From the papers."),
-        ]
-
-        events = await _run(service, repo)
-
-        [(started, finished)] = _steps(events)
-        assert (started.kind, started.args) == ("papers", {})
-        assert (finished.ok, finished.count) == (True, None)
-        assert repo.finish_step.await_args.kwargs["result"] is None
-        assert llm.chat_with_tools.await_args_list[1].args[0][-1]["content"] == "PAPERS"
-        assert _answer(events) == "From the papers."
-
-
 class TestStreaming:
     async def test_answer_arrives_in_several_events(self, chat_service, repo):
         service, llm, sparql, _ = chat_service
@@ -987,31 +966,3 @@ class TestModels:
         result = await service.models()
         assert result.models == {"m"}
         llm.get_models.assert_awaited_once()
-
-
-class TestGetFullTable:
-    async def test_parses_table(self, chat_service, mocker, sparql_results_json):
-        service, _, sparql, _ = chat_service
-        mocker.patch(
-            "src.services.chat_service.load_prompt",
-            return_value="SELECT ?name ?count WHERE { ?s ?p ?o }",
-        )
-        sparql.execute.return_value = sparql_results_json
-
-        resp = await service.get_full_table(limit=None)
-
-        assert resp.full_table.columns == ["name", "count"]
-        assert resp.full_table.rows[0] == {"name": "Rose", "count": 5}
-
-    async def test_appends_limit(self, chat_service, mocker, sparql_results_json):
-        service, _, sparql, _ = chat_service
-        mocker.patch(
-            "src.services.chat_service.load_prompt",
-            return_value="SELECT ?name ?count WHERE { ?s ?p ?o }",
-        )
-        sparql.execute.return_value = sparql_results_json
-
-        await service.get_full_table(limit=10)
-
-        sent_query = sparql.execute.await_args.args[0]
-        assert sent_query.endswith("LIMIT 10")

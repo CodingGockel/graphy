@@ -20,7 +20,7 @@ Requests flow **router → service → LLMService / SparqlService / LuceneServic
 | Path (`backend/src/`) | Role |
 |-----------------------|------|
 | `main.py` | App setup (`lifespan`): creates the LLM and HTTP clients, initializes the DB, runs a startup health check, mounts the routers under `/api/v1`. |
-| `api/v1/` | Routers: `chat` (the SSE stream), `sessions` (sessions and step results), `info` (`/models`, `/table`), `health`. |
+| `api/v1/` | Routers: `chat` (the SSE stream), `sessions` (sessions and step results), `info` (`/models`), `health`. |
 | `api/dependencies.py` | Dependency injection: builds the services from `app.state`. |
 | `api/exception_handlers.py` | Maps domain exceptions to HTTP 404 / 502 / 503, and to the `error` event of a chat stream. |
 | `services/chat_service.py` | The tool loop as an event generator (`run()`), persisting each turn step by step. |
@@ -30,7 +30,7 @@ Requests flow **router → service → LLMService / SparqlService / LuceneServic
 | `services/session_service.py` | Session metadata, history, rename, delete; step results. |
 | `services/build_prompt.py`, `lucene_setup.py` | Standalone CLIs to build the prompts and the Lucene index (see [Knowledge graph](./knowledge-graph.md)). |
 | `db/` | Async SQLAlchemy: `models.py` (`ChatSession`, `Message`, `Step`), `repository.py`, `database.py`. |
-| `resources/` | Prompts and templates, tool definitions, schema queries, Lucene connector, fixed queries. |
+| `resources/` | Prompts and templates, tool definitions, schema queries, Lucene connector. |
 
 ## A chat request
 
@@ -66,7 +66,8 @@ step or the answer
 - **`step_started` / `step_finished`** frame one tool call: its `kind` and arguments, then whether
   it worked, a `count` (rows or candidates) and, for a failed step, the `error` text. Results are
   never part of an event; they are stored in `steps.result`.
-- **`answer`** is the answer text, for now as a single event.
+- **`answer`** is the answer text: token by token when it is written from query results,
+  otherwise in one event.
 - **`done`** ends a complete turn.
 
 The repository is passed to `run()` per turn instead of being held by the service, because its DB
@@ -100,10 +101,9 @@ JSON files in `backend/src/resources/llm_tools/`.
 | `execute_sparql_query` | Runs a SPARQL query and feeds the results back. |
 | `use_previous_results` | Reuses the results of an earlier turn (`reference_turn`) instead of querying again. |
 | `ask_clarification` | Returns a question to the user and ends the loop. |
-| `load_phenobs_papers` | PhenObs-specific: loads the first pages of the PhenObs publications (PDFs in `resources/phenobs_papers/`) into context. |
 
-Each tool call becomes a step of the kind `resolve_entity`, `sparql_query`, `previous_results`,
-`papers` or `clarification`. A call to a tool that doesn't exist is treated as a clarification.
+Each tool call becomes a step of the kind `resolve_entity`, `sparql_query`, `previous_results`
+or `clarification`. A call to a tool that doesn't exist is treated as a clarification.
 
 **How the loop ends:**
 
@@ -158,7 +158,7 @@ Each tool call becomes a step of the kind `resolve_entity`, `sparql_query`, `pre
   fail, but the live reasoning then contains the answer text too. Set `LLM_STREAM_TOOL_LOOP=false`
   for this server.
 - **Reasoning:** `<think>…</think>` blocks (and a separate `reasoning_content` field, if the server
-  uses one) are separated from the output and sent as `thinking` events; see Streaming below.
+  uses one) are separated from the output and sent as `thinking` events; see Streaming above.
 
 ## Persistence
 
@@ -178,7 +178,7 @@ tables, and there are no migrations yet: after a schema change the database has 
 - **Status:** an assistant message is `running`, `complete`, `aborted` or `error`; user messages are
   always `complete`. Only complete turns are sent to the LLM as history, with any `<think>`
   reasoning removed from the answers.
-- **Steps:** `kind` is `resolve_entity`, `sparql_query`, `previous_results`, `papers` or
+- **Steps:** `kind` is `resolve_entity`, `sparql_query`, `previous_results` or
   `clarification`; `(message_id, ordinal)` is unique. `count` is the number of rows or candidates.
   `result` holds the full result (for a query: the SPARQL JSON) and is never loaded together with
   the history, only on demand by step ID.
@@ -189,7 +189,7 @@ tables, and there are no migrations yet: after a schema change the database has 
 
 A `previous_results` step stores no `result` of its own (it would duplicate the referenced step);
 its `args` name the turn it resolved to (`reference_turn`) plus the step that holds the data
-(`source_step_id`) and its `query`. A `papers` or `clarification` step has no result either.
+(`source_step_id`) and its `query`. A `clarification` step has no result either.
 
 Because history lives on the server, a client only has to remember the `session_id`.
 

@@ -96,7 +96,7 @@ class Step(Base):
         nullable=False,
     )
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
-    # resolve_entity | sparql_query | previous_results | papers | clarification
+    # resolve_entity | sparql_query | previous_results | clarification
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     args: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     # The model's reasoning before this tool call.

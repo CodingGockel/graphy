@@ -11,7 +11,7 @@ from uuid import UUID
 from pydantic import BaseModel
 
 StepKind = Literal[
-    "resolve_entity", "sparql_query", "previous_results", "papers", "clarification"
+    "resolve_entity", "sparql_query", "previous_results", "clarification"
 ]
 ErrorKind = Literal[
     "llm_unavailable",

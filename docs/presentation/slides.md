@@ -180,16 +180,17 @@ All routes under `/api/v1`
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/chat/` | NL question → agentic answer |
-| `GET` | `/chat/models` | list available LLM models |
-| `GET` | `/chat/full_table` | fixed tabular view — **no LLM** |
-| `GET` | `/session/{id}/history` | read chat history |
-| `PUT` | `/session/{id}/history` | replace history |
-| `DELETE` | `/session/{id}` | delete session (+ messages) |
-| `GET` | `/health/` | aggregate health (GraphDB + LLM) |
+| `POST` | `/chat` | NL question → agentic answer, as an event stream (SSE) |
+| `GET` | `/sessions?ids=…` | metadata of the given sessions |
+| `GET` | `/sessions/{id}` | chat history with the steps of each answer |
+| `PATCH` | `/sessions/{id}` | rename a session |
+| `DELETE` | `/sessions/{id}` | delete session (+ messages, steps) |
+| `GET` | `/steps/{id}/result` | result of one tool step |
+| `GET` | `/models` | list available LLM models |
+| `GET` | `/health` | aggregate health (GraphDB + LLM) |
 
 <!--
-Three routers: chat, session, health. full_table is interesting - a pre-baked query with no LLM, for a default data view.
+Four routers: chat, sessions, info, health. The chat answers as a stream of events; step results are loaded on demand.
 -->
 
 ---
@@ -299,7 +300,6 @@ zoom: 0.8
 | `execute_sparql_query` | run a new SPARQL `SELECT` / `ASK` | `query` |
 | `use_previous_results` | reuse an earlier turn's results — no re-query | `reference_turn` |
 | `ask_clarification` | ask the user when the question is ambiguous | `question` |
-| `load_phenobs_papers` | load PhenObs paper excerpts into context | *(none)* |
 
 <div v-click class="mt-4 text-sm">
 
@@ -308,7 +308,7 @@ zoom: 0.8
 </div>
 
 <!--
-Five tools, each a small JSON definition. resolve_entity is the trick that keeps queries grounded in real IDs. ask_clarification is the only one that ends the loop without a query.
+Four tools, each a small JSON definition. resolve_entity is the trick that keeps queries grounded in real IDs. ask_clarification is the only one that ends the loop without a query.
 -->
 
 ---
@@ -340,7 +340,7 @@ flowchart LR
 <div v-click>
 
 **…without losing data**
-- The final `generate_answer()` call uses the **complete** results
+- The final `generate_answer_stream()` call uses the **complete** results
 - So the answer is always based on everything
 
 </div>
@@ -541,7 +541,7 @@ zoom: 0.8
 <div><b>~1,100</b> lines of tests · <b>97</b> tests</div>
 <div><b>~4,880</b> lines of frontend</div>
 <div><b>~750</b> lines of prompts/templates</div>
-<div><b>5</b> LLM tools · <b>44</b> dependencies</div>
+<div><b>4</b> LLM tools · <b>43</b> dependencies</div>
 <div><b>25</b> backend source files</div>
 <div><b>90</b> commits · <b>9</b> contributors</div>
 <div>started <b>Apr 21, 2026</b></div>

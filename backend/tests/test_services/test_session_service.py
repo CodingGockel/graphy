@@ -194,7 +194,7 @@ class TestGetStepResult:
 
     async def test_step_without_a_result_is_not_a_404(self, session_service):
         service, repo = session_service
-        repo.get_step_result = AsyncMock(return_value=("papers", None))
+        repo.get_step_result = AsyncMock(return_value=("clarification", None))
 
         result = await service.get_step_result(uuid.uuid4())
 

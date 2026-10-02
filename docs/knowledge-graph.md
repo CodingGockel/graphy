@@ -164,6 +164,4 @@ Explore the classes and predicates before writing queries by hand.
 PhenObs-specific parts of the backend:
 
 - **Profiles:** `kg_profile.md` and `kg_answer_profile.md`
-- **Tool:** `load_phenobs_papers`
-- **Full table:** the `/table` endpoint
 - **Test questions:** [test-questions.md](./test-questions.md)

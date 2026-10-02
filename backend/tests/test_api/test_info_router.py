@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.api.dependencies import get_chat_service
 from src.main import app
-from src.models.schemas import FullTable, FullTableResponse, ModelResponse
+from src.models.schemas import ModelResponse
 
 
 def _override_chat_service() -> MagicMock:
@@ -25,27 +25,3 @@ class TestModelsEndpoint:
         _override_chat_service()
         assert client.get("/api/v1/chat/models").status_code == 404
 
-
-class TestTableEndpoint:
-    def test_get_table(self, client):
-        service = _override_chat_service()
-        service.get_full_table = AsyncMock(
-            return_value=FullTableResponse(
-                full_table=FullTable(columns=["name"], rows=[{"name": "Rose"}])
-            )
-        )
-
-        resp = client.get("/api/v1/table?limit=5")
-
-        assert resp.status_code == 200
-        assert resp.json()["full_table"]["rows"] == [{"name": "Rose"}]
-        service.get_full_table.assert_awaited_once_with(5)
-
-    def test_invalid_limit_is_422(self, client):
-        _override_chat_service()
-        resp = client.get("/api/v1/table?limit=0")  # ge=1
-        assert resp.status_code == 422
-
-    def test_old_path_is_gone(self, client):
-        _override_chat_service()
-        assert client.get("/api/v1/chat/full_table").status_code == 404

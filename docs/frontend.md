@@ -10,8 +10,8 @@ knowledge graph belongs here: no maps, no predefined tables, no KG-specific exam
 - **Settings:** language and theme.
 - **Service status** of the backend, knowledge graph and LLM.
 
-Query/result display, model selection and similar features come later, together with the backend
-changes in [plans/streaming-rework.md](./plans/streaming-rework.md).
+The chat also shows the agent's trace: its reasoning and every tool call with its query and
+result. Model selection and similar features come later.
 
 ## Stack and rules
 
@@ -105,7 +105,7 @@ frontend/
     its error or result. The result is loaded with `GET /steps/{id}/result` the first time the
     step is opened (`TraceResult`): query results as a plain table (first 50 rows), candidates as
     a list.
-  - Steps without anything to show (`papers`, `clarification`) are a plain line. An unknown kind
+  - A step without anything to show (`clarification`) is a plain line. An unknown kind
     is shown under its own name with its arguments as JSON, so a new backend tool needs no
     frontend change.
   - `lib/thinking.ts` remains as a fallback: a `<think>` block (or text before a lone `</think>`)

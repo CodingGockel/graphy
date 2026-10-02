@@ -61,12 +61,6 @@ You work in a loop. The intended pattern is **resolve named entities → run ONE
 - `use_previous_results`: reuse data from an earlier query in this conversation instead of querying
   again.
 - `ask_clarification`: ask the user a question when the request is too ambiguous to query.
-- `load_phenobs_papers`: load the first pages of all PhenObs scientific publications into context.
-  Use this tool when the user asks about PhenObs scientific output, published papers, research based
-  on PhenObs data, or what research questions can be answered using PhenObs data. After calling this
-  tool you will receive the text content of the first pages of published PhenObs papers, use it to
-  explain the research topics, questions, and findings. Do not query the knowledge graph for this
-  kind of question, use this tool instead.
 
 When you have gathered enough data, stop calling tools. Do not write the natural-language answer
 yourself — that is done separately from the data you collected.

@@ -252,7 +252,7 @@ class TestTransactions:
             lambda r: r.complete_turn(uuid.uuid4(), uuid.uuid4(), "answer", None),
             lambda r: r.fail_message(uuid.uuid4(), "partial"),
             lambda r: r.abort_message(uuid.uuid4(), "partial", None),
-            lambda r: r.start_step(uuid.uuid4(), 1, "papers", {}),
+            lambda r: r.start_step(uuid.uuid4(), 1, "clarification", {}),
             lambda r: r.finish_step(uuid.uuid4(), True, None, None, None, 5),
             lambda r: r.get_step_result(uuid.uuid4()),
             lambda r: r.get_history(uuid.uuid4(), turns=3),
@@ -318,6 +318,6 @@ class TestReusableData:
 
     def test_none_without_a_successful_query(self):
         message = make_db_message(
-            "assistant", "answer", steps=[make_db_step(ok=False), make_db_step(kind="papers")]
+            "assistant", "answer", steps=[make_db_step(ok=False), make_db_step(kind="clarification")]
         )
         assert reusable_data(message) is None

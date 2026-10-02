@@ -70,7 +70,6 @@
       "resolve_entity": "Entity-Suche",
       "sparql_query": "SPARQL-Abfrage",
       "previous_results": "Frühere Ergebnisse",
-      "papers": "Dokumente geladen",
       "clarification": "Rückfrage"
     },
     "failed": "fehlgeschlagen",

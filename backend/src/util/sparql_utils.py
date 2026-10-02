@@ -2,49 +2,6 @@ import json
 import re
 from typing import Any
 
-# xsd datatypes that should surface as JSON numbers rather than strings.
-_INT_DATATYPES = {"integer", "int", "long", "short", "byte", "nonNegativeInteger",
-                  "positiveInteger", "nonPositiveInteger", "negativeInteger",
-                  "unsignedInt", "unsignedLong", "unsignedShort", "unsignedByte"}
-_FLOAT_DATATYPES = {"decimal", "float", "double"}
-
-
-def _coerce_cell(binding: dict[str, Any]) -> Any:
-    """Convert a single SPARQL binding ({type, value, datatype?}) to a Python value,
-    casting numeric xsd datatypes to int/float and leaving everything else as a string."""
-    value = binding.get("value")
-    if value is None:
-        return None
-    datatype = binding.get("datatype", "")
-    local = datatype.rsplit("#", 1)[-1] if datatype else ""
-    try:
-        if local in _INT_DATATYPES:
-            return int(value)
-        if local in _FLOAT_DATATYPES:
-            return float(value)
-    except (TypeError, ValueError):
-        return value
-    return value
-
-
-def parse_sparql_bindings(raw_json: str, columns: list[str]) -> dict[str, Any]:
-    """Parse a SPARQL JSON results string into {"columns": [...], "rows": [...]}.
-
-    Rows are restricted to and ordered by `columns`; cells absent from a binding are
-    None. Numeric cells are coerced via their xsd datatype (see _coerce_cell).
-    """
-    data = json.loads(raw_json)
-    bindings = data.get("results", {}).get("bindings", [])
-    rows: list[dict[str, Any]] = []
-    for binding in bindings:
-        row: dict[str, Any] = {}
-        for column in columns:
-            cell = binding.get(column)
-            row[column] = _coerce_cell(cell) if cell is not None else None
-        rows.append(row)
-    return {"columns": columns, "rows": rows}
-
-
 def results_to_json(raw: str) -> Any:
     """Parse a raw SPARQL JSON result for storage in a JSON column. Text that is not
     JSON is kept as a plain string (also a valid JSON value)."""

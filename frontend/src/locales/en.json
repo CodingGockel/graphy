@@ -70,7 +70,6 @@
       "resolve_entity": "Entity lookup",
       "sparql_query": "SPARQL query",
       "previous_results": "Earlier results",
-      "papers": "Documents loaded",
       "clarification": "Clarifying question"
     },
     "failed": "failed",
