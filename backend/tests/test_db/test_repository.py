@@ -8,7 +8,7 @@ from sqlalchemy import inspect
 from sqlalchemy.dialects import postgresql
 
 from src.db.models import Message, Step
-from src.db.repository import ChatRepository, last_query_step
+from src.db.repository import ChatRepository, reusable_data
 from tests.factories import make_db_message, make_db_step
 
 
@@ -38,6 +38,10 @@ class TestSchema:
     def test_step_result_is_deferred(self):
         # Loading a step (e.g. with the history) must never pull its result.
         assert inspect(Step).column_attrs["result"].deferred is True
+
+    def test_step_result_is_never_lazy_loaded(self):
+        # An accidental access fails clearly instead of triggering a lazy load.
+        assert inspect(Step).column_attrs["result"].raiseload is True
 
     def test_steps_are_never_lazy_loaded(self):
         assert inspect(Message).relationships["steps"].lazy == "raise"
@@ -196,7 +200,15 @@ class TestTransactions:
         session.commit.assert_awaited_once()
 
 
-class TestLastQueryStep:
+class TestRollback:
+    async def test_rolls_the_session_back(self):
+        repo, session = _make_repo()
+        session.rollback = AsyncMock()
+        await repo.rollback()
+        session.rollback.assert_awaited_once()
+
+
+class TestReusableData:
     def test_picks_the_last_successful_query_step(self):
         wanted = make_db_step(args={"query": "B"}, ordinal=2)
         message = make_db_message(
@@ -209,10 +221,38 @@ class TestLastQueryStep:
                 make_db_step(kind="resolve_entity", ordinal=4),
             ],
         )
-        assert last_query_step(message) is wanted
+        assert reusable_data(message) == (wanted.id, "B")
+
+    def test_follows_a_previous_results_step_to_its_source(self):
+        source = uuid.uuid4()
+        message = make_db_message(
+            "assistant",
+            "answer",
+            steps=[
+                make_db_step(
+                    kind="previous_results",
+                    args={"reference_turn": 3, "source_step_id": str(source), "query": "Q"},
+                )
+            ],
+        )
+        assert reusable_data(message) == (source, "Q")
+
+    def test_ignores_a_previous_results_step_without_a_source(self):
+        message = make_db_message(
+            "assistant",
+            "answer",
+            steps=[
+                make_db_step(kind="previous_results", args={"reference_turn": 3}),
+                make_db_step(kind="previous_results", args={"source_step_id": "x"}),
+                make_db_step(
+                    kind="previous_results", args={"source_step_id": str(uuid.uuid4())}, ok=False
+                ),
+            ],
+        )
+        assert reusable_data(message) is None
 
     def test_none_without_a_successful_query(self):
         message = make_db_message(
             "assistant", "answer", steps=[make_db_step(ok=False), make_db_step(kind="papers")]
         )
-        assert last_query_step(message) is None
+        assert reusable_data(message) is None

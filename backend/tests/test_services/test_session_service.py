@@ -3,9 +3,8 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import HTTPException
-
 from src.services.session_service import SessionService
+from src.util.exceptions import SessionNotFoundException
 from tests.factories import make_db_message, make_db_step
 
 
@@ -47,6 +46,39 @@ class TestGetHistory:
         assert result.messages[1].sparql_results == '{"results": {"bindings": []}}'
         repo.get_step_result.assert_awaited_once_with(step_id)
 
+    async def test_turn_that_reused_data_shows_the_reused_query_and_result(
+        self, session_service
+    ):
+        service, repo = session_service
+        repo.session_exists = AsyncMock(return_value=True)
+        source = uuid.uuid4()
+        repo.get_full_history = AsyncMock(
+            return_value=[
+                make_db_message("user", "and again"),
+                make_db_message(
+                    "assistant",
+                    "answer",
+                    steps=[
+                        make_db_step(
+                            kind="previous_results",
+                            args={
+                                "reference_turn": 1,
+                                "source_step_id": str(source),
+                                "query": "SELECT",
+                            },
+                        )
+                    ],
+                ),
+            ]
+        )
+        repo.get_step_result = AsyncMock(
+            return_value=("sparql_query", {"results": {"bindings": []}})
+        )
+        result = await service.get_history(uuid.uuid4())
+        assert result.messages[1].sparql_query == "SELECT"
+        assert result.messages[1].sparql_results == '{"results": {"bindings": []}}'
+        repo.get_step_result.assert_awaited_once_with(source)
+
     async def test_message_without_query_step_has_no_sparql_fields(self, session_service):
         service, repo = session_service
         repo.session_exists = AsyncMock(return_value=True)
@@ -80,9 +112,8 @@ class TestGetHistory:
     async def test_missing_session_raises_404(self, session_service):
         service, repo = session_service
         repo.session_exists = AsyncMock(return_value=False)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(SessionNotFoundException):
             await service.get_history(uuid.uuid4())
-        assert exc.value.status_code == 404
 
 
 class TestDeleteSession:
@@ -94,6 +125,5 @@ class TestDeleteSession:
     async def test_missing_session_raises_404(self, session_service):
         service, repo = session_service
         repo.delete_session = AsyncMock(return_value=False)
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(SessionNotFoundException):
             await service.delete_session(uuid.uuid4())
-        assert exc.value.status_code == 404

@@ -8,12 +8,21 @@ from sqlalchemy.orm import selectinload
 from src.db.models import ChatSession, Message, Step
 
 
-def last_query_step(message: Message) -> Step | None:
-    """The last successful `sparql_query` step of an assistant message: the data a
-    later turn can reuse. Expects `message.steps` to be loaded."""
+def reusable_data(message: Message) -> tuple[uuid.UUID, str] | None:
+    """The data a later turn can reuse from an assistant message, as `(step id, query)`
+    of the step that holds the result: the message's last successful `sparql_query`
+    step, or the step a successful `previous_results` step pointed at (so reused data
+    stays reusable in the following turns). Expects `message.steps` to be loaded."""
     for step in reversed(message.steps):
-        if step.kind == "sparql_query" and step.ok:
-            return step
+        if not step.ok:
+            continue
+        if step.kind == "sparql_query":
+            return step.id, step.args.get("query", "")
+        if step.kind == "previous_results":
+            try:
+                return uuid.UUID(step.args["source_step_id"]), step.args.get("query", "")
+            except (KeyError, TypeError, ValueError):
+                continue
     return None
 
 
@@ -29,6 +38,11 @@ class ChatRepository:
 
     def __init__(self, session: AsyncSession):
         self._session = session
+
+    async def rollback(self) -> None:
+        """Leave a transaction that a failed statement has aborted, so the session
+        can be used again."""
+        await self._session.rollback()
 
     # --- sessions ---------------------------------------------------------
 

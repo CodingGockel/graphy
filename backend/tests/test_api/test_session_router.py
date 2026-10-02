@@ -1,11 +1,10 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
-from fastapi import HTTPException
-
 from src.api.dependencies import get_session_service
 from src.main import app
 from src.models.schemas import HistoryMessage, HistoryResponse
+from src.util.exceptions import SessionNotFoundException
 
 
 def _override_session_service() -> MagicMock:
@@ -32,7 +31,7 @@ class TestGetHistory:
 
     def test_not_found_is_404(self, client):
         service = _override_session_service()
-        service.get_history = AsyncMock(side_effect=HTTPException(status_code=404, detail="nope"))
+        service.get_history = AsyncMock(side_effect=SessionNotFoundException("nope"))
 
         resp = client.get(f"/api/v1/session/{uuid.uuid4()}/history")
 
@@ -63,7 +62,7 @@ class TestDeleteSession:
     def test_delete_missing_is_404(self, client):
         service = _override_session_service()
         service.delete_session = AsyncMock(
-            side_effect=HTTPException(status_code=404, detail="nope")
+            side_effect=SessionNotFoundException("nope")
         )
 
         resp = client.delete(f"/api/v1/session/{uuid.uuid4()}")

@@ -109,5 +109,20 @@ _FORBIDDEN_KEYWORDS = re.compile(
 )
 
 
+# String literals, IRIs and comments: text in there is data, not an operation
+# ("drop" as a search term, <http://example.org/delete>).
+_NON_CODE = re.compile(
+    r'''
+      """.*?"""                 # long string literal
+    | \'\'\'.*?\'\'\'
+    | "(?:[^"\\\n]|\\.)*"       # string literal
+    | \'(?:[^\'\\\n]|\\.)*\'
+    | <[^<>"{}|^`\\\s]*>        # IRI (no whitespace, so not a `<` comparison)
+    | \#[^\n]*                  # comment
+    ''',
+    re.VERBOSE | re.DOTALL,
+)
+
+
 def validate_query(llm_output: str) -> bool:
-    return _FORBIDDEN_KEYWORDS.search(llm_output) is None
+    return _FORBIDDEN_KEYWORDS.search(_NON_CODE.sub(" ", llm_output)) is None

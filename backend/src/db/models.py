@@ -107,7 +107,7 @@ class Step(Base):
     count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Deferred: never loaded with a step, only via ChatRepository.get_step_result.
     result: Mapped[Any] = mapped_column(
-        JSONB(none_as_null=True), nullable=True, deferred=True
+        JSONB(none_as_null=True), nullable=True, deferred=True, deferred_raiseload=True
     )
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)

@@ -24,7 +24,7 @@ from src.util.sparql_utils import (
     results_to_text,
 )
 from src.db.models import Message
-from src.db.repository import ChatRepository, last_query_step
+from src.db.repository import ChatRepository, reusable_data
 from src.services.llm_service import LLMService, ToolCallResult
 from src.services.sparql_service import SparqlService
 from src.services.lucene_service import LuceneService
@@ -37,7 +37,7 @@ TOOLS: list[dict[str, Any]] = load_tools()
 
 @dataclass
 class TurnData:
-    """Reusable data of an earlier turn: its last successful query step. The result
+    """Reusable data of an earlier turn: the query step holding its result. The result
     itself is only loaded (by step id) when use_previous_results asks for it."""
     step_id: uuid.UUID
     query: str
@@ -56,11 +56,9 @@ def _build_history(
             llm_messages.append({"role": "user", "content": msg.content})
         elif msg.role == "assistant":
             llm_messages.append({"role": "assistant", "content": msg.content})
-            step = last_query_step(msg)
-            if step is not None:
-                turn_map[msg.turn] = TurnData(
-                    step_id=step.id, query=step.args.get("query", "")
-                )
+            data = reusable_data(msg)
+            if data is not None:
+                turn_map[msg.turn] = TurnData(step_id=data[0], query=data[1])
 
     return llm_messages, turn_map
 
@@ -368,6 +366,8 @@ class ChatService:
         if state.message_id is None:
             return
         try:
+            # The failure may have been a DB error that left the transaction aborted.
+            await repo.rollback()
             await repo.finish_message(
                 state.message_id, content=state.answer, thinking=None, status="error"
             )
@@ -396,7 +396,15 @@ class ChatService:
             }
 
         if tc.name == "use_previous_results":
-            return "previous_results", {"reference_turn": self._resolve_ref(tc, turn_map)}
+            ref_turn = self._resolve_ref(tc, turn_map)
+            args: dict[str, Any] = {"reference_turn": ref_turn}
+            ref = turn_map.get(ref_turn)
+            if ref is not None:
+                # Points at the step that holds the data, so a later turn can reuse
+                # it again through this one (see reusable_data).
+                args["source_step_id"] = str(ref.step_id)
+                args["query"] = ref.query
+            return "previous_results", args
 
         if tc.name == "load_phenobs_papers":
             return "papers", {}

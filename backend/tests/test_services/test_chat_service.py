@@ -375,7 +375,13 @@ class TestUsePreviousResults:
         events = await _run(service, repo, message="and again")
 
         [(started, finished)] = _steps(events)
-        assert (started.kind, started.args) == ("previous_results", {"reference_turn": 7})
+        assert started.kind == "previous_results"
+        # the step points at the step that holds the data
+        assert started.args == {
+            "reference_turn": 7,
+            "source_step_id": str(step_id),
+            "query": "SELECT ?old {}",
+        }
         assert (finished.ok, finished.count) == (True, 1)
         repo.get_step_result.assert_awaited_once_with(step_id)
         # the result is not stored a second time
@@ -399,7 +405,7 @@ class TestUsePreviousResults:
         events = await _run(service, repo)
 
         [(started, _)] = _steps(events)
-        assert started.args == {"reference_turn": 7}  # the resolved turn
+        assert started.args["reference_turn"] == 7  # the resolved turn
         repo.get_step_result.assert_awaited_once_with(step_id)
 
     async def test_without_data_the_step_fails_and_a_fixed_answer_ends_the_turn(
@@ -413,13 +419,54 @@ class TestUsePreviousResults:
         events = await _run(service, repo)
 
         assert _names(events) == ["session", "step_started", "step_finished", "answer", "done"]
-        [(_, finished)] = _steps(events)
+        [(started, finished)] = _steps(events)
+        assert started.args == {"reference_turn": 1}
         assert finished.ok is False
         assert finished.error
         assert _answer(events) == NO_PREVIOUS_DATA_ANSWER
         assert llm.chat_with_tools.await_count == 1
         llm.generate_answer.assert_not_awaited()
         assert repo.finish_message.await_args.kwargs["status"] == "complete"
+
+    async def test_reused_data_stays_reusable_in_later_turns(self, chat_service, repo):
+        service, llm, _, _ = chat_service
+        source_step = uuid.uuid4()
+        # Turn 8 only reused the data of a turn that has left the history window.
+        repo.get_history.return_value = [
+            make_db_message("user", "follow-up", turn=8),
+            make_db_message(
+                "assistant",
+                "reused answer",
+                turn=8,
+                steps=[
+                    make_db_step(
+                        kind="previous_results",
+                        args={
+                            "reference_turn": 7,
+                            "source_step_id": str(source_step),
+                            "query": "SELECT ?old {}",
+                        },
+                    )
+                ],
+            ),
+        ]
+        repo.get_step_result.return_value = ("sparql_query", {"results": {"bindings": []}})
+        llm.chat_with_tools.side_effect = [
+            _tool_turn("use_previous_results", {"reference_turn": 8}),
+            _answer_turn("reused"),
+        ]
+
+        events = await _run(service, repo)
+
+        [(started, finished)] = _steps(events)
+        assert finished.ok is True
+        assert started.args == {
+            "reference_turn": 8,
+            "source_step_id": str(source_step),
+            "query": "SELECT ?old {}",
+        }
+        repo.get_step_result.assert_awaited_once_with(source_step)
+        assert llm.generate_answer.await_args.args[1] == "SELECT ?old {}"
 
     async def test_reusable_turns_are_listed_in_the_system_prompt(self, chat_service, repo):
         service, llm, _, _ = chat_service
@@ -550,6 +597,8 @@ class TestFailures:
         assert _names(events) == ["session", "step_started", "step_finished"]
         assert repo.finish_step.await_args.kwargs["ok"] is True
         assert repo.finish_message.await_args.kwargs["status"] == "error"
+        # a DB error may have left the transaction aborted
+        repo.rollback.assert_awaited_once()
 
     async def test_failure_of_the_answer_call_marks_message_as_error(self, chat_service, repo):
         service, llm, sparql, _ = chat_service

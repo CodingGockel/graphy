@@ -8,7 +8,7 @@
       "properties": {
         "reference_turn": {
           "type": "integer",
-          "description": "1-indexed turn number in the conversation whose SPARQL results should be reused"
+          "description": "Number of the turn whose SPARQL results should be reused, as listed under 'Reusable Data from Previous Turns'"
         }
       },
       "required": ["reference_turn"]

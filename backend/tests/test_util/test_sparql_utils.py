@@ -121,6 +121,26 @@ class TestValidateQuery:
         query = 'SELECT ?s WHERE { ?s rdfs:label "Constructa" }'
         assert validate_query(query) is True
 
+    def test_allows_keyword_in_string_literal(self):
+        query = 'SELECT ?s WHERE { ?s rdfs:label ?l FILTER(CONTAINS(LCASE(?l), "drop")) }'
+        assert validate_query(query) is True
+        assert validate_query("SELECT ?s WHERE { ?s rdfs:label 'insert here' }") is True
+        assert validate_query('SELECT ?s WHERE { ?s ?p """delete\nme""" }') is True
+
+    def test_allows_keyword_in_iri(self):
+        assert validate_query("SELECT ?o WHERE { <http://example.org/delete> ?p ?o }") is True
+
+    def test_allows_keyword_in_comment(self):
+        assert validate_query("SELECT ?s WHERE { ?s ?p ?o } # do not drop this") is True
+
+    def test_rejects_keyword_next_to_a_literal(self):
+        assert validate_query('INSERT DATA { <a> <b> "drop" }') is False
+        assert validate_query('SELECT ?s WHERE { ?s ?p "x" } ; DROP GRAPH <g>') is False
+
+    def test_comparison_operators_do_not_hide_a_keyword(self):
+        query = "SELECT ?s WHERE { ?s ?p ?o FILTER(?o < 5) } ; DELETE WHERE { ?a ?b ?c FILTER(?c > 1) }"
+        assert validate_query(query) is False
+
 
 class TestExtractSparqlQuery:
     def test_extracts_from_sparql_fence(self):
