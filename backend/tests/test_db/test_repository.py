@@ -175,6 +175,21 @@ class TestWrites:
         repo, _ = _make_repo(rowcount=0)
         assert await repo.set_title(uuid.uuid4(), "Title", manual=True) is False
 
+    async def test_count_messages_maps_sessions_to_counts(self):
+        repo, session = _make_repo()
+        a, b = uuid.uuid4(), uuid.uuid4()
+        session.execute.return_value.all.return_value = [(a, 4), (b, 2)]
+
+        assert await repo.count_messages([a, b]) == {a: 4, b: 2}
+
+        sql, _ = _sql(session)
+        assert "GROUP BY messages.session_id" in sql
+
+    async def test_count_messages_without_ids_does_not_query(self):
+        repo, session = _make_repo()
+        assert await repo.count_messages([]) == {}
+        session.execute.assert_not_awaited()
+
     async def test_get_sessions_without_ids_does_not_query(self):
         repo, session = _make_repo()
         assert await repo.get_sessions([]) == []
@@ -190,6 +205,7 @@ class TestTransactions:
             lambda r: r.create_session(),
             lambda r: r.session_exists(uuid.uuid4()),
             lambda r: r.get_sessions([uuid.uuid4()]),
+            lambda r: r.count_messages([uuid.uuid4()]),
             lambda r: r.set_title(uuid.uuid4(), "t", manual=False),
             lambda r: r.touch_session(uuid.uuid4()),
             lambda r: r.delete_session(uuid.uuid4()),

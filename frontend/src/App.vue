@@ -9,7 +9,7 @@ import SettingsDialog from './components/SettingsDialog.vue'
 import { useI18n } from './i18n'
 import { openSession } from './state/chat'
 import { overallStatus, startHealthPolling, statusSummaryKey } from './state/health'
-import { activeId } from './state/sessions'
+import { activeId, refreshSessions } from './state/sessions'
 
 const { t } = useI18n()
 
@@ -44,6 +44,7 @@ onMounted(() => {
   mobileQuery.addEventListener('change', onMobileChange)
   window.addEventListener('keydown', onKeydown)
   stopHealthPolling = startHealthPolling()
+  void refreshSessions()
   // Resume the session that was open before the reload.
   if (activeId.value) void openSession(activeId.value)
 })

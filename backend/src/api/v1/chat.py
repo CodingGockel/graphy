@@ -1,21 +1,19 @@
 import asyncio
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, status
 from fastapi.responses import StreamingResponse
 from src.db.repository import ChatRepository
 from src.models.events import SSE_PING, ChatEvent, encode_sse
-from src.models.schemas import ChatRequest, ModelResponse, FullTableResponse
+from src.models.schemas import ChatRequest
 from src.services.chat_service import ChatService, TurnState
 from src.api.dependencies import get_chat_service, get_db_sessionmaker
 from src.api.exception_handlers import stream_error_event
-from src.api.responses import RESP_404, RESP_500, RESP_502, RESP_503
+from src.api.responses import RESP_404, RESP_500
 from src.util.exceptions import SessionNotFoundException
 from src.util.logger import logger
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
-
-ERROR_RESPONSES = {**RESP_502, **RESP_503, **RESP_500}
 
 # Seconds without an event after which a `: ping` comment keeps the stream open.
 PING_INTERVAL = 15.0
@@ -136,50 +134,3 @@ async def chat(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-
-@router.get(
-    "/models",
-    response_model=ModelResponse,
-    status_code=status.HTTP_200_OK,
-    summary="List available LLM models",
-    description=(
-        "Returns all model IDs available on the configured LLM API (Blablador).\n\n"
-        "This helps verify which models are accessible and whether the configured "
-        "`blablador_sparql_model` is available.\n\n"
-        "**Response statuses:**\n"
-        "- `200 OK`: Models returned successfully.\n"
-        "- `503 Service Unavailable`: Could not reach the LLM API. Check server logs for details.\n"
-    ),
-    operation_id="chat_list_models",
-    responses={200: {"model": ModelResponse}, **ERROR_RESPONSES},
-)
-async def models(service: ChatService = Depends(get_chat_service)) -> ModelResponse:
-    return await service.models()
-
-@router.get(
-    "/full_table",
-    response_model=FullTableResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Returns the predefined full-table view",
-    description=(
-        "Runs a fixed, server-side SPARQL query (no LLM involved) and returns the result "
-        "as a structured table.\n\n"
-        "The columns are defined by the `full_table_columns` setting and the query by the "
-        "`full_table_query_path` setting. The response nests `columns` (ordered) and `rows` "
-        "(one object per row, keyed by column name; numeric cells are typed) under "
-        "`full_table`.\n\n"
-        "An optional `limit` query parameter caps the number of rows returned.\n\n"
-        "**Response statuses:**\n"
-        "- `200 OK`: Table returned successfully.\n"
-        "- `503 Service Unavailable`: Could not reach the SPARQL endpoint. Check server logs for details.\n"
-    ),
-    operation_id="chat_full_table",
-    responses={200: {"model": FullTableResponse}, **ERROR_RESPONSES},
-)
-async def full_table(
-    limit: int | None = Query(
-        default=None, ge=1, description="Maximum number of rows to return. No limit if omitted."
-    ),
-    service: ChatService = Depends(get_chat_service),
-) -> FullTableResponse:
-    return await service.get_full_table(limit)

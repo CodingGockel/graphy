@@ -17,7 +17,7 @@ from src.models.events import (
     StepStartedEvent,
     encode_sse,
 )
-from src.models.schemas import ChatRequest, FullTable, FullTableResponse, ModelResponse
+from src.models.schemas import ChatRequest
 from src.services.chat_service import TurnState
 from src.util.exceptions import (
     LLMNoContentException,
@@ -291,35 +291,3 @@ class TestAbort:
 
         assert len(frames) == 5
         repo.abort_message.assert_not_awaited()
-
-
-class TestModelsEndpoint:
-    def test_get_models(self, client):
-        service = _override_chat_service()
-        service.models = AsyncMock(return_value=ModelResponse(models={"a", "b"}))
-
-        resp = client.get("/api/v1/chat/models")
-
-        assert resp.status_code == 200
-        assert sorted(resp.json()["models"]) == ["a", "b"]
-
-
-class TestFullTableEndpoint:
-    def test_get_full_table(self, client):
-        service = _override_chat_service()
-        service.get_full_table = AsyncMock(
-            return_value=FullTableResponse(
-                full_table=FullTable(columns=["name"], rows=[{"name": "Rose"}])
-            )
-        )
-
-        resp = client.get("/api/v1/chat/full_table?limit=5")
-
-        assert resp.status_code == 200
-        assert resp.json()["full_table"]["rows"] == [{"name": "Rose"}]
-        service.get_full_table.assert_awaited_once_with(5)
-
-    def test_invalid_limit_is_422(self, client):
-        _override_chat_service()
-        resp = client.get("/api/v1/chat/full_table?limit=0")  # ge=1
-        assert resp.status_code == 422

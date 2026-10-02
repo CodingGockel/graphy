@@ -1,10 +1,11 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
-from typing import Optional, Literal, Any
+from pydantic import BaseModel, Field, StringConstraints
+from typing import Annotated, Optional, Literal, Any
 
 Status = Literal["ok", "degraded", "down"]
+MessageStatus = Literal["running", "complete", "aborted", "error"]
 
 class ChatRequest(BaseModel):
     message: str = Field(
@@ -18,33 +19,114 @@ class ChatRequest(BaseModel):
     )
 
 
-class HistoryMessage(BaseModel):
+class SessionSummary(BaseModel):
+    id: UUID = Field(
+        description="Session ID."
+    )
+    title: str | None = Field(
+        description="Session title; null as long as the session has none."
+    )
+    updated_at: datetime = Field(
+        description="When the last turn of the session completed (creation time before that)."
+    )
+    message_count: int = Field(
+        description="Number of stored messages (user and assistant)."
+    )
+
+
+class StepOut(BaseModel):
+    id: UUID = Field(
+        description="Step ID; its result is served by `GET /steps/{id}/result`."
+    )
+    ordinal: int = Field(
+        description="Position of the step within its message, starting at 1."
+    )
+    kind: str = Field(
+        description="resolve_entity | sparql_query | previous_results | papers | clarification."
+    )
+    args: dict[str, Any] = Field(
+        description="Arguments of the tool call, e.g. the query."
+    )
+    thinking: str | None = Field(
+        description="The model's reasoning before this tool call, if any."
+    )
+    ok: bool | None = Field(
+        description="Whether the step succeeded; null if it never finished."
+    )
+    count: int | None = Field(
+        description="Number of rows (queries) or candidates (entity lookup)."
+    )
+    error: str | None = Field(
+        description="Error text of a failed step."
+    )
+    duration_ms: int | None = Field(
+        description="How long the step took; null if it never finished."
+    )
+
+
+class MessageOut(BaseModel):
+    id: UUID = Field(
+        description="Message ID."
+    )
+    turn: int = Field(
+        description="Turn number; a user message and its answer share one."
+    )
     role: Literal["user", "assistant"] = Field(
         description="Who produced the message."
     )
     content: str = Field(
         description="The user message or the LLM answer."
     )
-    sparql_query: Optional[str] = Field(
-        default=None,
-        description="SPARQL query associated with this message, if any."
+    thinking: str | None = Field(
+        description="Assistant only: the reasoning before the final answer, if any."
     )
-    sparql_results: Optional[str] = Field(
-        default=None,
-        description="Raw JSON SPARQL results associated with this message, if any."
+    status: MessageStatus = Field(
+        description="User messages are always `complete`. A `running` message whose turn "
+        "can no longer be in progress is reported as `aborted`."
     )
-    created_at: Optional[datetime] = Field(
-        default=None,
+    created_at: datetime = Field(
         description="Server timestamp."
     )
-
-class HistoryResponse(BaseModel):
-    session_id: UUID = Field(
-        description="Session the messages belong to."
+    steps: list[StepOut] = Field(
+        description="Assistant only: the tool calls of the turn in order, without their results."
     )
-    messages: list[HistoryMessage] = Field(
+
+
+class SessionDetail(BaseModel):
+    id: UUID = Field(
+        description="Session ID."
+    )
+    title: str | None = Field(
+        description="Session title; null as long as the session has none."
+    )
+    updated_at: datetime = Field(
+        description="When the last turn of the session completed (creation time before that)."
+    )
+    messages: list[MessageOut] = Field(
         description="Full chronological message history of the session."
     )
+
+
+class SessionRename(BaseModel):
+    title: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+    ] = Field(
+        description="The new title. Surrounding whitespace is removed."
+    )
+
+
+class StepResult(BaseModel):
+    step_id: UUID = Field(
+        description="Step ID."
+    )
+    kind: str = Field(
+        description="Kind of the step; decides the shape of `result`."
+    )
+    result: Any = Field(
+        description="The stored result: SPARQL JSON for a query, the candidate list for an "
+        "entity lookup, null for a step without a result."
+    )
+
 
 class ServiceHealth(BaseModel):
     status: Status = Field(

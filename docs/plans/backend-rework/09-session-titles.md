@@ -29,7 +29,7 @@ ever failing the turn.
 
 ## Frontend
 
-- `state/chat.ts`: handle `session_title` → `renameSession(id, title)` locally. The local
+- `state/chat.ts`: handle `session_title` → `setTitle(id, title)` (local entry only; `renameSession` is the `PATCH`). The local
   `makeTitle` remains the placeholder until the event arrives.
 
 ## Tests

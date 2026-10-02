@@ -96,25 +96,34 @@ frontend/
 - **Waiting:** `GraphLoader` shows a breadth-first traversal of a small graph. Tree edges draw from
   node to node and the reached nodes light up. A timer drives the steps, so it also runs under
   reduced motion, just without the soft transitions.
-- **Stop button:** aborts the request in the browser. The backend still finishes, and the answer
-  shows up after reopening the session.
+- **Stop button:** aborts the request in the browser. The backend stops the turn and stores it as
+  aborted.
 - **Input:** an auto-growing textarea. Enter sends, Shift+Enter inserts a newline.
 - **Errors:** shown inline, with a localized headline, collapsible backend details and "Try again".
 
 ## Sessions
 
-The backend has no endpoint to list sessions yet. So the list lives in `localStorage`
-(`state/sessions.ts`): `{ id, title, updatedAt }` per session, plus the active ID. Swap this module
-once a `GET /sessions` exists.
+Which sessions belong to a browser is kept in `localStorage` (`state/sessions.ts`):
+`{ id, title, updatedAt }` per session, plus the active ID. The backend has no authentication, so
+a list of all sessions would show every visitor every chat; it only serves metadata for IDs the
+client already knows.
 
-- **New session:** the first answer returns the `session_id`, and the session is added to the list
-  with the shortened first question as its title.
-- **Add session:** you enter an ID; it is validated with `GET /session/{id}/history`.
-- **Open:** loads the history from the backend. The last active session reopens after a reload.
+- **On start:** `refreshSessions()` asks `GET /sessions?ids=…` (in chunks of 100) for the stored
+  IDs and takes over titles and `updatedAt`. Sessions the backend no longer knows are dropped
+  from the list. If the request fails (backend down), the list stays as it is.
+- **New session:** the `session` event of the first turn carries the `session_id`, and the session
+  is added to the list with the shortened first question as its title. That local title stays
+  until the backend has one.
+- **Add session:** you enter an ID; it is validated with `GET /sessions/{id}`.
+- **Open:** loads the history with `GET /sessions/{id}`. The last active session reopens after a
+  reload.
+  - A turn that failed without any answer text is skipped as a pair (question and answer): after
+    "Try again" the same question would otherwise appear twice.
+  - An aborted turn keeps its question; an answer without text is not rendered as an empty bubble.
 - **Per session:**
   - copy ID
-  - rename (local only)
-  - delete (`DELETE /session/{id}`, after confirmation)
+  - rename (`PATCH /sessions/{id}`, then the local entry)
+  - delete (`DELETE /sessions/{id}`, after confirmation)
 
 ## Service status
 

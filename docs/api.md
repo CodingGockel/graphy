@@ -6,17 +6,20 @@ Base URL: `/api/v1` (locally `http://localhost:8000/api/v1`). Schemas live in
 | Method | Path | Purpose |
 |--------|------|---------|
 | `POST` | `/chat` | Ask a question (creates a session if needed). Answers as an event stream. |
-| `GET` | `/session/{id}/history` | Full history of a session. |
-| `DELETE` | `/session/{id}` | Delete a session. |
+| `GET` | `/sessions?ids=…` | Metadata of the given sessions. |
+| `GET` | `/sessions/{id}` | Full history of a session, with the steps of each answer. |
+| `PATCH` | `/sessions/{id}` | Rename a session. |
+| `DELETE` | `/sessions/{id}` | Delete a session. |
+| `GET` | `/steps/{id}/result` | The result of one tool step. |
 | `GET` | `/health` | Status of GraphDB and the LLM API. |
-| `GET` | `/chat/models` | Models available on the LLM API. |
-| `GET` | `/chat/full_table` | Fixed tabular view (PhenObs-specific, not used by the frontend). |
+| `GET` | `/models` | Models available on the LLM API. |
+| `GET` | `/table` | Fixed tabular view (PhenObs-specific, not used by the frontend). |
 
 **Errors:**
 
 - **Shape:** every error body is `{ "status": "error", "error": "short message", "detail": "..." }`.
 - **Codes:** `502` means an upstream service answered with an error, `503` means a dependency is
-  unreachable, `404` means an unknown session, `422` means an invalid request.
+  unreachable, `404` means an unknown session or step, `422` means an invalid request.
 - **Chat stream:** `POST /chat` reports failures after its first byte as an `error` event instead
   (see below).
 
@@ -88,44 +91,92 @@ How a client should use it:
 6. **Clarifications:** when the LLM needs more information, its question simply arrives as
    `answer` (after a step of the kind `clarification`). Reply on the same session.
 7. **Query results:** results are never part of an event. A step's `count` says how many rows it
-   found; the data itself is available through the session history.
+   found; the data itself is loaded with `GET /steps/{id}/result`.
 8. **Reasoning:** `answer` can contain a `<think>…</think>` block (or text before a lone
    `</think>`) when the model answered without tools. Split it off before rendering (the frontend
    does this in `src/lib/thinking.ts`).
 
-### `GET /chat/models`
-
-`{ "models": ["alias-huge", …] }`, or `503` if the LLM API is unreachable.
-
-### `GET /chat/full_table?limit=N`
-
-Runs the fixed query from `FULL_TABLE_QUERY_PATH` (no LLM) and returns
-`{ "full_table": { "columns": [...], "rows": [{...}] } }`. Numeric cells are typed; missing cells are
-`null`. This endpoint is specific to the PhenObs KG.
-
 ## Sessions
 
-### `GET /session/{id}/history`
+There is deliberately **no** endpoint that lists all sessions: without authentication every visitor
+would see every chat. A client keeps the IDs of its own sessions and asks for their metadata.
+
+### `GET /sessions?ids=a,b,c`
+
+```jsonc
+[
+  { "id": "3f1d…-9ac2", "title": "Tulipa in Jena", "updated_at": "2026-10-01T17:13:47Z", "message_count": 4 }
+]
+```
+
+Metadata for the given IDs, most recently updated first. `ids` is required: comma-separated UUIDs,
+at most 100 (`422` otherwise). Unknown IDs are simply left out, so a client can tell which of its
+sessions no longer exist. `title` is `null` until the session has one; `updated_at` is bumped when
+a turn completes.
+
+### `GET /sessions/{id}`
 
 ```jsonc
 {
-  "session_id": "3f1d…-9ac2",
+  "id": "3f1d…-9ac2",
+  "title": null,
+  "updated_at": "2026-10-01T17:13:47Z",
   "messages": [
-    { "role": "user", "content": "…", "sparql_query": null, "sparql_results": null, "created_at": "2026-10-01T17:13:47Z" },
-    { "role": "assistant", "content": "…", "sparql_query": "SELECT …", "sparql_results": "{…}", "created_at": "…" }
+    { "id": "…", "turn": 1, "role": "user", "content": "…", "thinking": null,
+      "status": "complete", "created_at": "…", "steps": [] },
+    { "id": "8b0e…", "turn": 1, "role": "assistant", "content": "…", "thinking": null,
+      "status": "complete", "created_at": "…",
+      "steps": [
+        { "id": "51c7…", "ordinal": 1, "kind": "sparql_query", "args": { "query": "SELECT …" },
+          "thinking": null, "ok": true, "count": 1, "error": null, "duration_ms": 412 }
+      ] }
   ]
 }
 ```
 
-`404` if the session doesn't exist. The frontend uses this both to open a session and to validate
-"Add session".
+The full history in chronological order; `404` if the session doesn't exist.
 
-`sparql_query` and `sparql_results` come from the turn's last successful query step, or from the
-query step whose results the turn reused; they are `null` when the turn used no data.
+- **Turns:** a user message and its answer share a `turn` number. Every turn is returned, also
+  failed and aborted ones; `status` of the assistant message says which (`running`, `complete`,
+  `aborted`, `error`). User messages are always `complete`.
+- **`running`:** a turn that is still in progress, e.g. in another tab. A `running` message older
+  than 10 minutes is reported as `aborted` (its turn died with the server).
+- **Steps:** the tool calls of the turn, with the same fields as the `step_started` /
+  `step_finished` events plus `thinking`. `ok`, `count` and `duration_ms` are `null` for a step
+  that never finished. Results are not included.
 
-### `DELETE /session/{id}`
+### `PATCH /sessions/{id}`
+
+`{ "title": "…" }` (1–200 characters, surrounding whitespace is removed). Returns the session's
+metadata as in `GET /sessions`; `404` if unknown. A title set this way is never overwritten by a
+generated one.
+
+### `DELETE /sessions/{id}`
 
 Deletes the session with its messages and steps. `204`, or `404` if unknown.
+
+### `GET /steps/{id}/result`
+
+```jsonc
+{ "step_id": "51c7…", "kind": "sparql_query", "result": { "head": { "vars": […] }, "results": { "bindings": […] } } }
+```
+
+The stored result of one step; `404` if the step doesn't exist. `kind` decides the shape:
+standard SPARQL JSON for `sparql_query`, a list of `{ uri, label, score }` for `resolve_entity`,
+`null` for every other kind and for a failed step. A `previous_results` step has no result of its
+own; its `args.source_step_id` names the step that holds the data.
+
+## Models and table
+
+### `GET /models`
+
+`{ "models": ["alias-huge", …] }`, or `503` if the LLM API is unreachable.
+
+### `GET /table?limit=N`
+
+Runs the fixed query from `FULL_TABLE_QUERY_PATH` (no LLM) and returns
+`{ "full_table": { "columns": [...], "rows": [{...}] } }`. Numeric cells are typed; missing cells are
+`null`. This endpoint is specific to the PhenObs KG.
 
 ## Health
 

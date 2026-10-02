@@ -37,11 +37,16 @@ async function startRename(): Promise<void> {
   input.value?.select()
 }
 
-function commitRename(): void {
+async function commitRename(): Promise<void> {
   if (!editing.value) return
   editing.value = false
   const title = draft.value.trim()
-  if (title) renameSession(props.session.id, title)
+  if (!title || title === props.session.title) return
+  try {
+    await renameSession(props.session.id, title)
+  } catch (err) {
+    window.alert(t('session.renameFailed', { error: errorHeadline(toApiError(err)) }))
+  }
 }
 
 function cancelRename(): void {

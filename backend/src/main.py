@@ -10,7 +10,8 @@ from src.services.sparql_service import SparqlService
 from src.services.health_service import HealthService
 from src.api.v1.chat import router as chat_router
 from src.api.v1.health import router as health_router
-from src.api.v1.session import router as session_router
+from src.api.v1.info import router as info_router
+from src.api.v1.sessions import router as sessions_router
 from src.api.exception_handlers import register_exception_handlers
 from src.util.config import get_settings
 from src.util.logger import logger
@@ -72,4 +73,5 @@ app.add_middleware(
 
 app.include_router(chat_router, prefix="/api/v1")
 app.include_router(health_router, prefix="/api/v1")
-app.include_router(session_router, prefix="/api/v1")
+app.include_router(sessions_router, prefix="/api/v1")
+app.include_router(info_router, prefix="/api/v1")

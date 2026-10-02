@@ -37,7 +37,8 @@
     "titleLabel": "Titel",
     "delete": "Löschen",
     "confirmDelete": "Session „{title}“ löschen? Der Verlauf wird auch im Backend gelöscht.",
-    "deleteFailed": "Löschen fehlgeschlagen: {error}"
+    "deleteFailed": "Löschen fehlgeschlagen: {error}",
+    "renameFailed": "Umbenennen fehlgeschlagen: {error}"
   },
   "addSession": {
     "title": "Session hinzufügen",

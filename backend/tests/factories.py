@@ -1,5 +1,6 @@
 """Small builders for mocking the OpenAI client surface and DB rows in unit tests."""
 import uuid
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -73,5 +74,14 @@ def make_db_message(
     m.status = status
     m.thinking = None
     m.steps = steps if steps is not None else []
-    m.created_at = created_at
+    m.created_at = created_at or datetime.now(timezone.utc)
     return m
+
+
+def make_db_session(session_id=None, title=None, updated_at=None) -> MagicMock:
+    """Mimic a `src.db.models.ChatSession` ORM row."""
+    s = MagicMock()
+    s.id = session_id or uuid.uuid4()
+    s.title = title
+    s.updated_at = updated_at or datetime.now(timezone.utc)
+    return s

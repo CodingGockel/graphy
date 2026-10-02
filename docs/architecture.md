@@ -20,14 +20,14 @@ Requests flow **router → service → LLMService / SparqlService / LuceneServic
 | Path (`backend/src/`) | Role |
 |-----------------------|------|
 | `main.py` | App setup (`lifespan`): creates the LLM and HTTP clients, initializes the DB, runs a startup health check, mounts the routers under `/api/v1`. |
-| `api/v1/` | Routers: `chat` (the SSE stream), `session`, `health`. |
+| `api/v1/` | Routers: `chat` (the SSE stream), `sessions` (sessions and step results), `info` (`/models`, `/table`), `health`. |
 | `api/dependencies.py` | Dependency injection: builds the services from `app.state`. |
 | `api/exception_handlers.py` | Maps domain exceptions to HTTP 404 / 502 / 503, and to the `error` event of a chat stream. |
 | `services/chat_service.py` | The tool loop as an event generator (`run()`), persisting each turn step by step. |
 | `services/llm_service.py` | Wraps the OpenAI client: tool-calling turns and the final answer call. |
 | `services/sparql_service.py` | Runs SPARQL over HTTP against GraphDB. |
 | `services/lucene_service.py` | Entity lookup in the Lucene index (`resolve_entity`). |
-| `services/session_service.py` | Read and delete a session's history. |
+| `services/session_service.py` | Session metadata, history, rename, delete; step results. |
 | `services/build_prompt.py`, `lucene_setup.py` | Standalone CLIs to build the prompts and the Lucene index (see [Knowledge graph](./knowledge-graph.md)). |
 | `db/` | Async SQLAlchemy: `models.py` (`ChatSession`, `Message`, `Step`), `repository.py`, `database.py`. |
 | `resources/` | Prompts and templates, tool definitions, schema queries, Lucene connector, fixed queries. |
@@ -164,7 +164,7 @@ Because history lives on the server, a client only has to remember the `session_
 The API maps domain exceptions to status codes and returns
 `{ "status": "error", "error": "...", "detail": "..." }`:
 
-- **404** — unknown session.
+- **404** — unknown session or step.
 - **502** — an upstream service answered with an error (bad SPARQL status, empty LLM output).
 - **503** — the LLM API or GraphDB is unreachable.
 

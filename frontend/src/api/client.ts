@@ -1,4 +1,11 @@
-import type { ChatEvent, ChatRequest, ErrorResponse, HealthResponse, HistoryResponse } from './types'
+import type {
+  ChatEvent,
+  ChatRequest,
+  ErrorResponse,
+  HealthResponse,
+  SessionDetail,
+  SessionSummary,
+} from './types'
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '/api/v1').replace(/\/$/, '')
 
@@ -119,7 +126,10 @@ async function readEvents(response: Response, onEvent: (event: ChatEvent) => voi
   if (!finished) throw new ApiError(-1, 'The answer stream ended unexpectedly')
 }
 
-const sessionPath = (id: string) => `/session/${encodeURIComponent(id)}`
+const sessionPath = (id: string) => `/sessions/${encodeURIComponent(id)}`
+
+/** The most IDs the backend accepts in one `getSessions` call. */
+export const MAX_SESSION_IDS = 100
 
 export const api = {
   /**
@@ -151,8 +161,17 @@ export const api = {
     await readEvents(response, onEvent)
   },
 
-  getHistory(sessionId: string, signal?: AbortSignal): Promise<HistoryResponse> {
-    return request<HistoryResponse>(`${sessionPath(sessionId)}/history`, { signal })
+  /** Metadata of the given sessions (at most `MAX_SESSION_IDS`). Unknown IDs are left out. */
+  getSessions(ids: string[], signal?: AbortSignal): Promise<SessionSummary[]> {
+    return request<SessionSummary[]>(`/sessions?ids=${ids.map(encodeURIComponent).join(',')}`, { signal })
+  },
+
+  getSession(sessionId: string, signal?: AbortSignal): Promise<SessionDetail> {
+    return request<SessionDetail>(sessionPath(sessionId), { signal })
+  },
+
+  renameSession(sessionId: string, title: string): Promise<SessionSummary> {
+    return request<SessionSummary>(sessionPath(sessionId), { method: 'PATCH', body: { title } })
   },
 
   deleteSession(sessionId: string): Promise<void> {

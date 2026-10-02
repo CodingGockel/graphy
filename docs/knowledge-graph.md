@@ -165,5 +165,5 @@ PhenObs-specific parts of the backend:
 
 - **Profiles:** `kg_profile.md` and `kg_answer_profile.md`
 - **Tool:** `load_phenobs_papers`
-- **Full table:** the `/chat/full_table` endpoint
+- **Full table:** the `/table` endpoint
 - **Test questions:** [test-questions.md](./test-questions.md)

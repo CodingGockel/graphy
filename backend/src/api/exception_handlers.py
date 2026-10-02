@@ -12,6 +12,7 @@ from src.util.exceptions import (
     SparqlDatabaseStatusCode,
     SparqlQueryException,
     SessionNotFoundException,
+    StepNotFoundException,
 )
 from src.util.logger import logger
 
@@ -75,6 +76,10 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(SessionNotFoundException)
     async def _session_not_found(request: Request, exc: SessionNotFoundException):
         return _err(404, "Session not found", str(exc))
+
+    @app.exception_handler(StepNotFoundException)
+    async def _step_not_found(request: Request, exc: StepNotFoundException):
+        return _err(404, "Step not found", str(exc))
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_exc(request: Request, exc: StarletteHTTPException):

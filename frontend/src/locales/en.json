@@ -37,7 +37,8 @@
     "titleLabel": "Title",
     "delete": "Delete",
     "confirmDelete": "Delete session “{title}”? The history is also deleted on the backend.",
-    "deleteFailed": "Delete failed: {error}"
+    "deleteFailed": "Delete failed: {error}",
+    "renameFailed": "Rename failed: {error}"
   },
   "addSession": {
     "title": "Add session",

@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import { api, ApiError, isAbortError, toApiError } from '../api/client'
-import type { HistoryResponse } from '../api/types'
+import type { MessageOut, SessionDetail } from '../api/types'
 import { errorFromEvent } from '../lib/errors'
 import { activeId, makeTitle, removeSession, touchSession } from './sessions'
 
@@ -40,9 +40,22 @@ function reset(): void {
   chatError.value = null
 }
 
-function showHistory(id: string, history: HistoryResponse): void {
-  activeId.value = id
-  messages.value = history.messages.map((m) => entry(m.role, m.content))
+/**
+ * The stored messages that are shown. A turn that failed without any answer text is left
+ * out as a pair: after "retry" its question would otherwise appear twice. An answer
+ * without text (aborted before it started, or still running) is no bubble; its question
+ * stays.
+ */
+function visibleMessages(history: MessageOut[]): MessageOut[] {
+  const failedTurns = new Set(
+    history.filter((m) => m.role === 'assistant' && m.status === 'error' && !m.content).map((m) => m.turn),
+  )
+  return history.filter((m) => !failedTurns.has(m.turn) && (m.role === 'user' || m.content !== ''))
+}
+
+function showSession(session: SessionDetail): void {
+  activeId.value = session.id
+  messages.value = visibleMessages(session.messages).map((m) => entry(m.role, m.content))
 }
 
 export function newSession(): void {
@@ -58,8 +71,8 @@ export async function openSession(id: string): Promise<void> {
   loadingHistory.value = true
   const token = requestToken
   try {
-    const history = await api.getHistory(id)
-    if (token === requestToken) showHistory(id, history)
+    const session = await api.getSession(id)
+    if (token === requestToken) showSession(session)
   } catch (err) {
     if (token === requestToken) chatError.value = { error: toApiError(err), retry: () => void openSession(id) }
   } finally {
@@ -69,11 +82,11 @@ export async function openSession(id: string): Promise<void> {
 
 /** Adds an existing backend session by ID and opens it. Throws `ApiError` (404 if unknown). */
 export async function importSession(id: string): Promise<void> {
-  const history = await api.getHistory(id)
-  const firstQuestion = history.messages.find((m) => m.role === 'user')
-  touchSession(id, firstQuestion ? makeTitle(firstQuestion.content) : id.slice(0, 8))
+  const session = await api.getSession(id)
+  const firstQuestion = session.messages.find((m) => m.role === 'user')
+  touchSession(id, session.title ?? (firstQuestion ? makeTitle(firstQuestion.content) : id.slice(0, 8)))
   reset()
-  showHistory(id, history)
+  showSession(session)
 }
 
 export async function deleteSession(id: string): Promise<void> {

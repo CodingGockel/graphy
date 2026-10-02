@@ -37,17 +37,46 @@ export type ChatEvent =
   | { event: 'done'; message_id: string; row_count: number | null }
   | { event: 'error'; kind: ChatErrorKind; message: string }
 
-export interface HistoryMessage {
-  role: 'user' | 'assistant'
-  content: string
-  sparql_query: string | null
-  sparql_results: string | null
-  created_at: string | null
+export interface SessionSummary {
+  id: string
+  title: string | null
+  updated_at: string
+  message_count: number
 }
 
-export interface HistoryResponse {
-  session_id: string
-  messages: HistoryMessage[]
+export type MessageStatus = 'running' | 'complete' | 'aborted' | 'error'
+
+/** One tool call of an answer. Its result is not included. */
+export interface StepOut {
+  id: string
+  ordinal: number
+  // A string, not StepKind: a newer backend may know more kinds.
+  kind: string
+  args: Record<string, unknown>
+  thinking: string | null
+  ok: boolean | null
+  count: number | null
+  error: string | null
+  duration_ms: number | null
+}
+
+/** A user message and its answer share a `turn`; only the answer has `steps`. */
+export interface MessageOut {
+  id: string
+  turn: number
+  role: 'user' | 'assistant'
+  content: string
+  thinking: string | null
+  status: MessageStatus
+  created_at: string
+  steps: StepOut[]
+}
+
+export interface SessionDetail {
+  id: string
+  title: string | null
+  updated_at: string
+  messages: MessageOut[]
 }
 
 export type ServiceStatus = 'ok' | 'degraded' | 'down'

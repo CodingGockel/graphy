@@ -1,8 +1,10 @@
 import { computed, ref, watch } from 'vue'
+import { api, MAX_SESSION_IDS } from '../api/client'
 import { readJSON, readString, removeKey, writeJSON, writeString } from '../lib/storage'
 
-// The backend has no endpoint to list sessions yet, so the list lives in the browser.
-// Once it does, this module is the one place to switch over.
+// Which sessions belong to this browser lives in localStorage: the backend has no
+// authentication, so a list of all sessions would show every visitor every chat. It only
+// serves titles and metadata for the IDs we already know (see refreshSessions).
 
 export interface SessionEntry {
   id: string
@@ -39,9 +41,46 @@ export function touchSession(id: string, title: string): void {
   else sessions.value.push({ id, title, updatedAt: Date.now() })
 }
 
-export function renameSession(id: string, title: string): void {
+/** Sets the title of the local entry only. */
+export function setTitle(id: string, title: string): void {
   const session = sessions.value.find((s) => s.id === id)
   if (session) session.title = title
+}
+
+/** Renames the session on the backend, then locally. Throws `ApiError`. */
+export async function renameSession(id: string, title: string): Promise<void> {
+  const summary = await api.renameSession(id, title)
+  setTitle(id, summary.title ?? title)
+}
+
+/**
+ * Brings the stored list in line with the backend: titles and `updatedAt` are taken over,
+ * sessions the backend no longer knows are dropped. If the backend cannot be reached, the
+ * list stays as it is.
+ */
+export async function refreshSessions(): Promise<void> {
+  const ids = sessions.value.map((s) => s.id)
+  const known = new Map<string, { title: string | null; updatedAt: number }>()
+  try {
+    for (let i = 0; i < ids.length; i += MAX_SESSION_IDS) {
+      for (const summary of await api.getSessions(ids.slice(i, i + MAX_SESSION_IDS))) {
+        known.set(summary.id, { title: summary.title, updatedAt: Date.parse(summary.updated_at) })
+      }
+    }
+  } catch {
+    return
+  }
+
+  const asked = new Set(ids)
+  // Sessions added while the request was running were not asked for: keep them.
+  sessions.value = sessions.value.filter((s) => known.has(s.id) || !asked.has(s.id))
+  for (const session of sessions.value) {
+    const remote = known.get(session.id)
+    if (!remote) continue
+    // Without a backend title the local one (the shortened first question) stays.
+    if (remote.title) session.title = remote.title
+    if (!Number.isNaN(remote.updatedAt)) session.updatedAt = remote.updatedAt
+  }
 }
 
 export function removeSession(id: string): void {

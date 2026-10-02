@@ -74,6 +74,20 @@ class ChatRepository:
         await self._session.commit()
         return sessions
 
+    async def count_messages(self, session_ids: list[uuid.UUID]) -> dict[uuid.UUID, int]:
+        """Number of messages per session. Sessions without messages are missing
+        from the result."""
+        if not session_ids:
+            return {}
+        result = await self._session.execute(
+            select(Message.session_id, func.count())
+            .where(Message.session_id.in_(session_ids))
+            .group_by(Message.session_id)
+        )
+        counts = {row[0]: row[1] for row in result.all()}
+        await self._session.commit()
+        return counts
+
     async def set_title(self, session_id: uuid.UUID, title: str, manual: bool) -> bool:
         """Set the session title. Returns whether a session with that id existed."""
         result = await self._session.execute(

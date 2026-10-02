@@ -48,7 +48,7 @@ runtime**. To change one, edit `.env` and restart.
 |----------|---------|-------------|
 | `SYSTEM_PROMPT_PATH` | required | Generated query prompt, normally `src/resources/prompts/system_prompt.md`. |
 | `ANSWER_SYSTEM_PROMPT_PATH` | `src/resources/prompts/answer_system_prompt.md` | Generated answer prompt. |
-| `FULL_TABLE_QUERY_PATH` | `src/resources/queries/full_table.rq` | Query behind `GET /chat/full_table` (PhenObs-specific). |
+| `FULL_TABLE_QUERY_PATH` | `src/resources/queries/full_table.rq` | Query behind `GET /table` (PhenObs-specific). |
 | `FULL_TABLE_COLUMNS` | PhenObs columns | JSON list on one line; column order of the full table. |
 
 The inputs of the prompt builder (`GENERIC_RULES_PATH`, `KG_PROFILE_PATH`, `GENERIC_ANSWER_PATH`,

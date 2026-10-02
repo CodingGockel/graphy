@@ -37,7 +37,8 @@
     "titleLabel": "Titre",
     "delete": "Supprimer",
     "confirmDelete": "Supprimer la session « {title} » ? L’historique est aussi supprimé sur le backend.",
-    "deleteFailed": "Échec de la suppression : {error}"
+    "deleteFailed": "Échec de la suppression : {error}",
+    "renameFailed": "Échec du renommage : {error}"
   },
   "addSession": {
     "title": "Ajouter une session",
