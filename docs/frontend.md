@@ -30,7 +30,8 @@ changes in [plans/streaming-rework.md](./plans/streaming-rework.md).
     `ApiError` on an HTTP error or when the stream ends without `done` / `error`.
   - **`state/chat.ts`** adopts the session from the `session` event, appends `answer` deltas to
     the assistant entry and turns an `error` event into the same error box (with retry) as an
-    HTTP error (`lib/errors.ts` maps its `kind`). Steps and reasoning events are ignored for now.
+    HTTP error (`lib/errors.ts` maps its `kind`). `session_title` sets the title of the local
+    session entry. Steps and reasoning events are ignored for now.
     "Stop" aborts the fetch; a partial answer stays visible. A `404` on send or when opening a
     session removes the stale session from the local list; the error box then offers "New
     session" instead of a retry, which could not succeed.
@@ -114,7 +115,7 @@ client already knows.
   from the list. If the request fails (backend down), the list stays as it is.
 - **New session:** the `session` event of the first turn carries the `session_id`, and the session
   is added to the list with the shortened first question as its title. That local title stays
-  until the backend has one.
+  until the backend's title arrives in the `session_title` event of the same turn.
 - **Add session:** you enter an ID; it is validated with `GET /sessions/{id}`.
 - **Open:** loads the history with `GET /sessions/{id}`. The last active session reopens after a
   reload.

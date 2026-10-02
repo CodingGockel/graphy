@@ -40,6 +40,8 @@ runtime**. To change one, edit `.env` and restart.
 | `DATABASE_URL` | required | Async DSN, e.g. `postgresql+asyncpg://admin:admin@localhost:5432/db`. Must match `database/.env`. |
 | `CHAT_HISTORY_DEPTH` | required | Number of earlier turns loaded into the LLM context per request. |
 | `CHAT_MAX_TOOL_ITERATIONS` | required | Upper bound for the agentic tool loop. |
+| `GENERATE_SESSION_TITLES` | `true` | Let the LLM write a session's title from its first question. Off: the shortened question is the title. |
+| `SESSION_TITLE_TIMEOUT` | `5` | Seconds a finished turn waits for a title that is still being generated; after that the shortened question is used. |
 | `CORS_ALLOW_ORIGINS` | `[]` | JSON list of allowed origins. Not needed locally (Vite proxy) or behind nginx (same origin). |
 
 ### Prompts and resources
@@ -48,6 +50,7 @@ runtime**. To change one, edit `.env` and restart.
 |----------|---------|-------------|
 | `SYSTEM_PROMPT_PATH` | required | Generated query prompt, normally `src/resources/prompts/system_prompt.md`. |
 | `ANSWER_SYSTEM_PROMPT_PATH` | `src/resources/prompts/answer_system_prompt.md` | Generated answer prompt. |
+| `SESSION_TITLE_PROMPT_PATH` | `src/resources/prompts/title_prompt.md` | Prompt of the title call. Static and KG-agnostic, not generated. |
 | `FULL_TABLE_QUERY_PATH` | `src/resources/queries/full_table.rq` | Query behind `GET /table` (PhenObs-specific). |
 | `FULL_TABLE_COLUMNS` | PhenObs columns | JSON list on one line; column order of the full table. |
 

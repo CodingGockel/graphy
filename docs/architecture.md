@@ -57,6 +57,11 @@ the turn (`backend/src/models/events.py`) at the moment they happen:
 `session` → (`step_started` → `step_finished`)\* → `answer` → `done`
 
 - **`session`** carries the session ID and the ID of the assistant message.
+- **`session_title`** carries the title of a session that had none. `LLMService.generate_title()`
+  runs as a task next to the turn, so it never delays the stream; the title is stored and sent
+  between two loop iterations once it is there, at the latest before `done` (then waited for up
+  to `SESSION_TITLE_TIMEOUT`). A failed or slow call falls back to the shortened question and
+  never fails the turn; a title set by hand is never overwritten.
 - **`step_started` / `step_finished`** frame one tool call: its `kind` and arguments, then whether
   it worked, a `count` (rows or candidates) and, for a failed step, the `error` text. Results are
   never part of an event; they are stored in `steps.result`.
@@ -174,5 +179,5 @@ The API maps domain exceptions to status codes and returns
 
 ## What's next
 
-The planned move to a streamed response (SSE): live steps, thinking and answer tokens, a session
-list, LLM-generated titles. See [plans/streaming-rework.md](./plans/streaming-rework.md).
+The rest of the move to a streamed response (SSE): answer tokens and thinking as they are
+generated, and the steps shown in the frontend. See [plans/streaming-rework.md](./plans/streaming-rework.md).

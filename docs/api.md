@@ -53,8 +53,8 @@ data: {"message_id":"8b0e…","row_count":1}
 
 | Event | Fields | Meaning |
 |-------|--------|---------|
-| `session` | `session_id`, `message_id`, `title` | Always first. `message_id` is the assistant message; `title` may be `null`. |
-| `session_title` | `session_id`, `title` | The session got a title (not sent yet). |
+| `session` | `session_id`, `message_id`, `title` | Always first. `message_id` is the assistant message; `title` is `null` while the title is still being generated (a `session_title` follows). |
+| `session_title` | `session_id`, `title` | The session got its title. Sent once, on the turn that gives a session its title (normally the first), anywhere after `session` and always before `done`. |
 | `step_started` | `step_id`, `ordinal`, `kind`, `args` | A tool call begins. `kind`: `resolve_entity`, `sparql_query`, `previous_results`, `papers`, `clarification`. |
 | `step_finished` | `step_id`, `ok`, `count`, `error`, `duration_ms` | The tool call ended. `count` is the number of rows or candidates; `error` is set when `ok` is `false`. |
 | `thinking` | `delta` | A piece of the model's reasoning (not sent yet). It belongs to whatever comes next: the following step, or the answer. |
@@ -93,7 +93,11 @@ How a client should use it:
    `answer` (after a step of the kind `clarification`). Reply on the same session.
 7. **Query results:** results are never part of an event. A step's `count` says how many rows it
    found; the data itself is loaded with `GET /steps/{id}/result`.
-8. **Reasoning:** `answer` can contain a `<think>…</think>` block (or text before a lone
+8. **Titles:** the title is written by the LLM from the first question, next to the turn. If
+   that fails or takes too long, the shortened question is used; with `GENERATE_SESSION_TITLES`
+   off it always is, and then it is already part of the `session` event. A title set with
+   `PATCH /sessions/{id}` is never overwritten.
+9. **Reasoning:** `answer` can contain a `<think>…</think>` block (or text before a lone
    `</think>`) when the model answered without tools. Split it off before rendering (the frontend
    does this in `src/lib/thinking.ts`).
 

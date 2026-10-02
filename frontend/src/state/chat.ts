@@ -2,7 +2,7 @@ import { ref } from 'vue'
 import { api, ApiError, isAbortError, toApiError } from '../api/client'
 import type { MessageOut, SessionDetail } from '../api/types'
 import { errorFromEvent } from '../lib/errors'
-import { activeId, makeTitle, removeSession, touchSession } from './sessions'
+import { activeId, makeTitle, removeSession, setTitle, touchSession } from './sessions'
 
 export interface ChatEntry {
   id: number
@@ -141,8 +141,12 @@ export async function send(text: string): Promise<void> {
         switch (event.event) {
           case 'session':
             turn.started = true
-            touchSession(event.session_id, makeTitle(message))
+            // Until the backend has a title, the shortened question stands in.
+            touchSession(event.session_id, event.title ?? makeTitle(message))
             activeId.value = event.session_id
+            break
+          case 'session_title':
+            setTitle(event.session_id, event.title)
             break
           case 'answer':
             if (!turn.answer) {
@@ -155,7 +159,7 @@ export async function send(text: string): Promise<void> {
           case 'error':
             turn.failure = errorFromEvent(event.kind, event.message)
             break
-          // `done` ends the stream; steps, reasoning and titles are not shown yet.
+          // `done` ends the stream; steps and reasoning are not shown yet.
         }
       },
       controller.signal,
