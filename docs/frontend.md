@@ -23,7 +23,16 @@ changes in [plans/streaming-rework.md](./plans/streaming-rework.md).
   one page).
 - Plain CSS: design tokens in `src/styles/base.css`, component styles scoped.
 - Backend calls only go through `src/api/client.ts`. `src/api/types.ts` mirrors
-  `backend/src/models/schemas.py`.
+  `backend/src/models/schemas.py` and the chat events in `backend/src/models/events.py`.
+  - **Chat is a stream:** `api.chat(message, sessionId, onEvent, signal)` reads the SSE response
+    of `POST /chat` with `fetch` + `ReadableStream` (`EventSource` cannot `POST`) and a small
+    parser in `client.ts`; no dependency. It calls `onEvent` per event and rejects with
+    `ApiError` on an HTTP error or when the stream ends without `done` / `error`.
+  - **`state/chat.ts`** adopts the session from the `session` event, appends `answer` deltas to
+    the assistant entry and turns an `error` event into the same error box (with retry) as an
+    HTTP error (`lib/errors.ts` maps its `kind`). Steps and reasoning events are ignored for now.
+    "Stop" aborts the fetch; a partial answer stays visible. A `404` on send removes the stale
+    session from the local list.
 
 ## Structure
 
@@ -32,7 +41,7 @@ frontend/
   index.html            favicons, manifest, theme applied before first paint
   public/               favicon.svg/.ico, apple-touch-icon, icon-192/512, site.webmanifest
   src/
-    api/                client.ts (fetch wrapper, ApiError), types.ts
+    api/                client.ts (fetch wrapper, SSE reader, ApiError), types.ts
     components/         AppSidebar, SessionItem, StatusPanel, ChatView, ChatMessage, ChatInput,
                         GraphLoader, BaseDialog, SettingsDialog, AddSessionDialog,
                         AppLogo, AppWordmark, AppIcon

@@ -27,6 +27,11 @@ involved, so this is the safe half of token streaming.
   `messages.thinking`; the events are still streamed.
 - An abort mid-answer stores the partial answer with `status="aborted"`.
 
+## Out of scope
+
+- The frontend already appends `answer` deltas (ticket 06). Its scroll-follow does not react to
+  a growing answer yet; that is fixed in ticket 12.
+
 ## Tests
 
 - New `tests/test_util/test_think_splitter.py`: no think block, one block, tag split across

@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { api, ApiError, isAbortError, toApiError } from '../api/client'
 import type { HistoryResponse } from '../api/types'
+import { errorFromEvent } from '../lib/errors'
 import { activeId, makeTitle, removeSession, touchSession } from './sessions'
 
 export interface ChatEntry {
@@ -97,21 +98,54 @@ export async function send(text: string): Promise<void> {
   pending.value = true
   controller = new AbortController()
   const token = ++requestToken
+  const sessionId = activeId.value
+  // What the stream has produced so far.
+  const turn: { answer: ChatEntry | null; failure: ApiError | null } = { answer: null, failure: null }
 
   try {
-    const response = await api.chat(message, activeId.value, controller.signal)
-    if (token !== requestToken) return
-    touchSession(response.session_id, makeTitle(message))
-    activeId.value = response.session_id
-    messages.value.push(entry('assistant', response.answer))
+    await api.chat(
+      message,
+      sessionId,
+      (event) => {
+        if (token !== requestToken) return
+        switch (event.event) {
+          case 'session':
+            touchSession(event.session_id, makeTitle(message))
+            activeId.value = event.session_id
+            break
+          case 'answer':
+            if (!turn.answer) {
+              messages.value.push(entry('assistant', ''))
+              // The reactive entry, so appending to it updates the view.
+              turn.answer = messages.value[messages.value.length - 1]
+            }
+            turn.answer.content += event.delta
+            break
+          case 'error':
+            turn.failure = errorFromEvent(event.kind, event.message)
+            break
+          // `done` ends the stream; steps, reasoning and titles are not shown yet.
+        }
+      },
+      controller.signal,
+    )
+    if (turn.failure) throw turn.failure
   } catch (err) {
     if (token !== requestToken) return
     if (isAbortError(err)) {
+      // A partial answer stays visible.
       aborted.value = true
     } else {
-      // Drop the unanswered question; "retry" sends it again.
-      messages.value = messages.value.filter((m) => m.id !== question.id)
-      chatError.value = { error: toApiError(err), retry: () => void send(message) }
+      const error = toApiError(err)
+      // The backend no longer knows this session: forget it, "retry" starts a new one.
+      if (error.status === 404 && sessionId) {
+        removeSession(sessionId)
+        if (activeId.value === sessionId) activeId.value = null
+      }
+      // Drop the unanswered question (and a partial answer); "retry" sends it again.
+      const dropped = [question.id, turn.answer?.id]
+      messages.value = messages.value.filter((m) => !dropped.includes(m.id))
+      chatError.value = { error, retry: () => void send(message) }
     }
   } finally {
     if (token === requestToken) {

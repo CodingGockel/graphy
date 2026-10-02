@@ -20,9 +20,9 @@ Requests flow **router → service → LLMService / SparqlService / LuceneServic
 | Path (`backend/src/`) | Role |
 |-----------------------|------|
 | `main.py` | App setup (`lifespan`): creates the LLM and HTTP clients, initializes the DB, runs a startup health check, mounts the routers under `/api/v1`. |
-| `api/v1/` | Routers: `chat`, `session`, `health`. |
+| `api/v1/` | Routers: `chat` (the SSE stream), `session`, `health`. |
 | `api/dependencies.py` | Dependency injection: builds the services from `app.state`. |
-| `api/exception_handlers.py` | Maps domain exceptions to HTTP 404 / 502 / 503. |
+| `api/exception_handlers.py` | Maps domain exceptions to HTTP 404 / 502 / 503, and to the `error` event of a chat stream. |
 | `services/chat_service.py` | The tool loop as an event generator (`run()`), persisting each turn step by step. |
 | `services/llm_service.py` | Wraps the OpenAI client: tool-calling turns and the final answer call. |
 | `services/sparql_service.py` | Runs SPARQL over HTTP against GraphDB. |
@@ -37,14 +37,16 @@ Requests flow **router → service → LLMService / SparqlService / LuceneServic
 `POST /api/v1/chat` with `{ message, session_id }`:
 
 1. **Session:** without a `session_id` a new session is created. An unknown ID is a `404`, and
-   nothing is written.
+   nothing is written. This is checked before the response starts; from then on the status is
+   `200` and the response is an event stream.
 2. **History:** the last `CHAT_HISTORY_DEPTH` complete turns are loaded from PostgreSQL.
 3. **Messages:** the user message is stored, and the assistant message is created with status
    `running`.
 4. **Tool loop:** the LLM works on the question (below). Every tool call is stored as a step when
    it starts and updated when it finishes.
 5. **Answer:** the answer is stored and the message set to `complete`.
-6. **Response:** `answer`, `session_id`, `llm_generated_query`, `sparql_query_result`.
+
+Each of these steps reaches the client as an event while it happens.
 
 ### Events
 
@@ -63,9 +65,22 @@ the turn (`backend/src/models/events.py`) at the moment they happen:
 The repository is passed to `run()` per turn instead of being held by the service, because its DB
 session has to live as long as the event stream.
 
-For now `POST /chat` consumes this generator itself and builds the JSON response from the events.
-The SSE route that forwards them to the client is
-[ticket 05](./plans/backend-rework/05-sse-chat-route.md).
+### The stream
+
+The route (`api/v1/chat.py`) forwards these events as Server-Sent Events
+(format: [API](./api.md#post-chat)):
+
+- **Producer and queue:** a task runs `ChatService.run()` and puts the events on a queue; the
+  response body reads from it. The task opens its own DB session, which lives as long as the turn
+  (a request-scoped session would be closed before the body is sent).
+- **Heartbeat:** when the queue stays empty for 15 s, the body sends a `: ping` comment line, so
+  proxies don't close an idle stream during a long LLM call.
+- **Errors:** an exception in the turn becomes an `error` event (the mapping sits next to the
+  HTTP handlers in `api/exception_handlers.py`); the status code is already sent by then.
+- **Abort:** when the client disconnects, the response body ends and cancels the producer. The
+  producer then marks the assistant message `aborted`, with the answer produced so far, through
+  a fresh DB session and shielded from the cancellation. Steps that already ran are kept; a step
+  that was running stays without a result.
 
 ## The tool loop
 
@@ -100,7 +115,7 @@ Each tool call becomes a step of the kind `resolve_entity`, `sparql_query`, `pre
 - **No Lucene connector** (`resolve_entity` fails with a `SparqlQueryException`): the step fails and
   the LLM is told to match labels with a query instead.
 - **Infrastructure errors** (`SparqlDatabaseException`, `SparqlDatabaseStatusCode`): these abort the
-  request.
+  turn; the client gets an `error` event.
 - **Any exception** that aborts the turn (a bug included) sets the assistant message to `error`
   first; the step that was running is closed as failed, earlier steps stay as they are.
 
@@ -134,11 +149,13 @@ tables, and there are no migrations yet: after a schema change the database has 
   `result` holds the full result (for a query: the SPARQL JSON) and is never loaded together with
   the history, only on demand by step ID.
 - **Reusing data:** `use_previous_results` refers to a turn by its `turn` number and gets the result
-  of that turn's last successful `sparql_query` step.
+  of that turn's last successful `sparql_query` step. A turn that itself only reused data passes
+  that data on: its `previous_results` step points at the step holding the result.
 - **Transactions:** every `ChatRepository` method ends its transaction, reads included.
 
 A `previous_results` step stores no `result` of its own (it would duplicate the referenced step);
-its `args` name the turn it resolved to. A `papers` or `clarification` step has no result either.
+its `args` name the turn it resolved to (`reference_turn`) plus the step that holds the data
+(`source_step_id`) and its `query`. A `papers` or `clarification` step has no result either.
 
 Because history lives on the server, a client only has to remember the `session_id`.
 

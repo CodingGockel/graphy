@@ -15,7 +15,8 @@ Endpoint: `{GRAPHDB_BASE_URL}/repositories/{GRAPHDB_REPOSITORY}` (see [Configura
 - **Other non-200 or unreachable** → `SparqlDatabaseStatusCode` / `SparqlDatabaseException`: an
   infrastructure problem. The request is aborted (HTTP 502 / 503).
 
-Only read queries are allowed: `validate_query()` rejects `INSERT`, `DELETE`, `CONSTRUCT` and `DROP`.
+Only read queries are allowed: `validate_query()` rejects `INSERT`, `DELETE`, `CONSTRUCT` and `DROP`
+(as whole words, in any case; string literals, IRIs and comments are ignored).
 
 ## Entity resolution (Lucene)
 

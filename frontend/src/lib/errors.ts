@@ -1,5 +1,20 @@
-import type { ApiError } from '../api/client'
+import { ApiError } from '../api/client'
+import type { ChatErrorKind } from '../api/types'
 import { t } from '../i18n'
+
+// The HTTP status the backend uses for the same failure outside a stream.
+const EVENT_STATUS: Record<ChatErrorKind, number> = {
+  llm_unavailable: 503,
+  llm_no_content: 502,
+  sparql_unavailable: 503,
+  sparql_failed: 502,
+  internal: 500,
+}
+
+/** An `error` event of the chat stream as an `ApiError`, so it is shown like an HTTP error. */
+export function errorFromEvent(kind: ChatErrorKind, message: string): ApiError {
+  return new ApiError(EVENT_STATUS[kind] ?? 500, message)
+}
 
 /** A short, localized sentence for an API error. The raw backend message goes into details. */
 export function errorHeadline(err: ApiError): string {

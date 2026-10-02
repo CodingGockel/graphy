@@ -69,7 +69,8 @@ events, and the trace simply contains steps only.
   capped at the first 50 rows with a "50 of N" note; candidates as a list (label, URI). Loading
   and error state inside the body.
 - `ChatView.vue`: the `GraphLoader` stays visible while `pending`; the scroll-follow watcher must
-  also react to trace changes.
+  also react to trace changes and to a growing answer. Today it only watches the length of
+  `messages`, so it does not follow the `answer` deltas that ticket 10 starts to send.
 
 Nothing KG-specific: labels describe the tool kind generically (`papers` → "Documents loaded").
 

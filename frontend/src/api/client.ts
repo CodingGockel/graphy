@@ -1,4 +1,4 @@
-import type { ChatRequest, ChatResponse, ErrorResponse, HealthResponse, HistoryResponse } from './types'
+import type { ChatEvent, ChatRequest, ErrorResponse, HealthResponse, HistoryResponse } from './types'
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '/api/v1').replace(/\/$/, '')
 
@@ -70,12 +70,85 @@ async function errorFromResponse(response: Response): Promise<ApiError> {
   }
 }
 
+/** One SSE frame (the text between two blank lines) as an event; null for a comment-only frame. */
+function parseFrame(frame: string): ChatEvent | null {
+  let name = ''
+  const data: string[] = []
+  for (const line of frame.split('\n')) {
+    if (line.startsWith(':')) continue // comment, e.g. the `: ping` heartbeat
+    if (line.startsWith('event:')) name = line.slice(6).trim()
+    else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''))
+  }
+  if (!name) return null
+  try {
+    return { event: name, ...JSON.parse(data.join('\n')) } as ChatEvent
+  } catch {
+    throw new ApiError(-1, 'Invalid event from the backend')
+  }
+}
+
+/** Reads an SSE body and calls `onEvent` per event. Frames may be split across chunks. */
+async function readEvents(response: Response, onEvent: (event: ChatEvent) => void): Promise<void> {
+  if (!response.body) throw new ApiError(-1, 'Empty response')
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let finished = false
+
+  for (;;) {
+    let chunk: ReadableStreamReadResult<Uint8Array>
+    try {
+      chunk = await reader.read()
+    } catch (err) {
+      if (isAbortError(err)) throw err
+      throw new ApiError(0, 'Network error')
+    }
+    if (chunk.done) break
+    buffer = (buffer + decoder.decode(chunk.value, { stream: true })).replace(/\r\n/g, '\n')
+
+    let end: number
+    while ((end = buffer.indexOf('\n\n')) !== -1) {
+      const event = parseFrame(buffer.slice(0, end))
+      buffer = buffer.slice(end + 2)
+      if (!event) continue
+      if (event.event === 'done' || event.event === 'error') finished = true
+      onEvent(event)
+    }
+  }
+
+  if (!finished) throw new ApiError(-1, 'The answer stream ended unexpectedly')
+}
+
 const sessionPath = (id: string) => `/session/${encodeURIComponent(id)}`
 
 export const api = {
-  chat(message: string, sessionId: string | null, signal?: AbortSignal): Promise<ChatResponse> {
+  /**
+   * Sends a message and reports the turn's events as they arrive. Resolves once the stream
+   * has ended with `done` or `error`; an HTTP error (e.g. 404 for an unknown session) or a
+   * stream that just stops rejects with `ApiError`.
+   */
+  async chat(
+    message: string,
+    sessionId: string | null,
+    onEvent: (event: ChatEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const body: ChatRequest = { message, session_id: sessionId }
-    return request<ChatResponse>('/chat', { method: 'POST', body, signal })
+    let response: Response
+    try {
+      // fetch + ReadableStream: EventSource cannot POST.
+      response = await fetch(`${BASE_URL}/chat`, {
+        method: 'POST',
+        headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal,
+      })
+    } catch (err) {
+      if (isAbortError(err)) throw err
+      throw new ApiError(0, 'Network error')
+    }
+    if (!response.ok) throw await errorFromResponse(response)
+    await readEvents(response, onEvent)
   },
 
   getHistory(sessionId: string, signal?: AbortSignal): Promise<HistoryResponse> {

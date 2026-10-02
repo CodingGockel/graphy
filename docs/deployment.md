@@ -21,6 +21,12 @@ One root `docker-compose.yml`, configured by one root `.env`:
 Because nginx serves the frontend and proxies `/api`, the app needs no absolute backend URL and no
 CORS setup. `cloudflared` is an optional fourth service (see [Public link](#public-link-cloudflare-tunnel)).
 
+> **Streaming:** `POST /api/v1/chat` answers with Server-Sent Events. A proxy in front of the
+> backend must not buffer that response (nginx: `proxy_buffering off;` for `/api/`) and must not
+> time out an idle stream before the 15 s heartbeat (`proxy_read_timeout`). The backend sends
+> `X-Accel-Buffering: no`, which nginx honours; other proxies need their own setting. With
+> buffering on, the answer arrives in one piece at the end and "stop" is only noticed late.
+
 ## Configure the host
 
 ```bash
