@@ -61,6 +61,22 @@ class TestGetHistory:
         assert result.messages[1].sparql_results is None
         repo.get_step_result.assert_not_awaited()
 
+    async def test_assistant_messages_that_are_not_complete_are_left_out(self, session_service):
+        service, repo = session_service
+        repo.session_exists = AsyncMock(return_value=True)
+        repo.get_full_history = AsyncMock(
+            return_value=[
+                make_db_message("user", "q1", turn=1),
+                make_db_message("assistant", "", turn=1, status="error"),
+                make_db_message("user", "q2", turn=2),
+                make_db_message("assistant", "", turn=2, status="running"),
+                make_db_message("user", "q3", turn=3),
+                make_db_message("assistant", "a3", turn=3),
+            ]
+        )
+        result = await service.get_history(uuid.uuid4())
+        assert [m.content for m in result.messages] == ["q1", "q2", "q3", "a3"]
+
     async def test_missing_session_raises_404(self, session_service):
         service, repo = session_service
         repo.session_exists = AsyncMock(return_value=False)

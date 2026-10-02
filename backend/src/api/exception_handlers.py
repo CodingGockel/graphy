@@ -10,6 +10,7 @@ from src.util.exceptions import (
     SparqlDatabaseException,
     SparqlDatabaseStatusCode,
     SparqlQueryException,
+    SessionNotFoundException,
 )
 from src.util.logger import logger
 
@@ -48,6 +49,10 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _sparql_query_invalid(request: Request, exc: SparqlQueryException):
         logger.warning(f"SPARQL query invalid: {exc}")
         return _err(502, "SPARQL query failed", str(exc))
+
+    @app.exception_handler(SessionNotFoundException)
+    async def _session_not_found(request: Request, exc: SessionNotFoundException):
+        return _err(404, "Session not found", str(exc))
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_exc(request: Request, exc: StarletteHTTPException):

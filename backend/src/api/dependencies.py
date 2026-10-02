@@ -60,10 +60,10 @@ def get_chat_service(
     llm: LLMService = Depends(get_llm_service),
     sparql: SparqlService = Depends(get_sparql_service),
     lucene: LuceneService = Depends(get_lucene_service),
-    db: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> ChatService:
-    return ChatService(llm=llm, sparql=sparql, lucene=lucene, db=db, settings=settings)
+    # No DB session here: the repository is passed to ChatService.run() per turn.
+    return ChatService(llm=llm, sparql=sparql, lucene=lucene, settings=settings)
 
 
 def get_health_service(

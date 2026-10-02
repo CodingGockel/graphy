@@ -39,12 +39,13 @@ How a client should use it:
 
 1. **First message:** send `session_id: null`. The backend creates a session.
 2. **Every message:** take `session_id` from the response and send it next time.
-   - **Unknown IDs:** an unknown or expired ID does **not** return 404. It silently starts a new
-     session, so always adopt the returned ID.
+   - **Unknown IDs:** an ID the backend doesn't know is a `404`; nothing is created or stored.
+     Start a new session by sending `session_id: null`.
 3. **Clarifications:** when the LLM needs more information, its question simply arrives as `answer`,
    with `llm_generated_query: ""` and `sparql_query_result: null`. Reply on the same session.
 4. **Query results:** `sparql_query_result` is a **string**. Parse it to get standard SPARQL JSON
-   (`head.vars`, `results.bindings`).
+   (`head.vars`, `results.bindings`). Query and result are those of the turn's last successful
+   query; a turn that only reused an earlier turn's results returns `""` and `null`.
 5. **Reasoning:** `answer` can contain a `<think>…</think>` block (or text before a lone
    `</think>`) when the model answered without tools. Split it off before rendering (the frontend
    does this in `src/lib/thinking.ts`).

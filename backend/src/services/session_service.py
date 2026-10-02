@@ -17,9 +17,12 @@ class SessionService:
         if not await self.repo.session_exists(session_id):
             raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
         messages = await self.repo.get_full_history(session_id)
+        # An assistant message that is not complete (failed, aborted, running) has no
+        # place in this response shape; its question is kept, as before the rework.
+        visible = [m for m in messages if m.role == "user" or m.status == "complete"]
         return HistoryResponse(
             session_id=session_id,
-            messages=[await self._to_schema(m) for m in messages],
+            messages=[await self._to_schema(m) for m in visible],
         )
 
     async def delete_session(self, session_id: uuid.UUID) -> None:

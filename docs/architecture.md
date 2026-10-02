@@ -22,8 +22,8 @@ Requests flow **router → service → LLMService / SparqlService / LuceneServic
 | `main.py` | App setup (`lifespan`): creates the LLM and HTTP clients, initializes the DB, runs a startup health check, mounts the routers under `/api/v1`. |
 | `api/v1/` | Routers: `chat`, `session`, `health`. |
 | `api/dependencies.py` | Dependency injection: builds the services from `app.state`. |
-| `api/exception_handlers.py` | Maps domain exceptions to HTTP 502 / 503. |
-| `services/chat_service.py` | The tool loop and persistence of each turn. |
+| `api/exception_handlers.py` | Maps domain exceptions to HTTP 404 / 502 / 503. |
+| `services/chat_service.py` | The tool loop as an event generator (`run()`), persisting each turn step by step. |
 | `services/llm_service.py` | Wraps the OpenAI client: tool-calling turns and the final answer call. |
 | `services/sparql_service.py` | Runs SPARQL over HTTP against GraphDB. |
 | `services/lucene_service.py` | Entity lookup in the Lucene index (`resolve_entity`). |
@@ -36,12 +36,36 @@ Requests flow **router → service → LLMService / SparqlService / LuceneServic
 
 `POST /api/v1/chat` with `{ message, session_id }`:
 
-1. **Session:** if `session_id` is missing *or unknown*, a new session is created.
+1. **Session:** without a `session_id` a new session is created. An unknown ID is a `404`, and
+   nothing is written.
 2. **History:** the last `CHAT_HISTORY_DEPTH` complete turns are loaded from PostgreSQL.
-3. **Tool loop:** the LLM works on the question (below).
-4. **Persist:** the user message is stored before the loop, the answer after it, with the last
-   executed query and its results as a step.
-5. **Response:** `answer`, `session_id`, `llm_generated_query`, `sparql_query_result`.
+3. **Messages:** the user message is stored, and the assistant message is created with status
+   `running`.
+4. **Tool loop:** the LLM works on the question (below). Every tool call is stored as a step when
+   it starts and updated when it finishes.
+5. **Answer:** the answer is stored and the message set to `complete`.
+6. **Response:** `answer`, `session_id`, `llm_generated_query`, `sparql_query_result`.
+
+### Events
+
+`ChatService.run()` does not return a response. It is an async generator that yields the events of
+the turn (`backend/src/models/events.py`) at the moment they happen:
+
+`session` → (`step_started` → `step_finished`)\* → `answer` → `done`
+
+- **`session`** carries the session ID and the ID of the assistant message.
+- **`step_started` / `step_finished`** frame one tool call: its `kind` and arguments, then whether
+  it worked, a `count` (rows or candidates) and, for a failed step, the `error` text. Results are
+  never part of an event; they are stored in `steps.result`.
+- **`answer`** is the answer text, for now as a single event.
+- **`done`** ends a complete turn.
+
+The repository is passed to `run()` per turn instead of being held by the service, because its DB
+session has to live as long as the event stream.
+
+For now `POST /chat` consumes this generator itself and builds the JSON response from the events.
+The SSE route that forwards them to the client is
+[ticket 05](./plans/backend-rework/05-sse-chat-route.md).
 
 ## The tool loop
 
@@ -56,6 +80,9 @@ JSON files in `backend/src/resources/llm_tools/`.
 | `ask_clarification` | Returns a question to the user and ends the loop. |
 | `load_phenobs_papers` | PhenObs-specific: loads the first pages of the PhenObs publications (PDFs in `resources/phenobs_papers/`) into context. |
 
+Each tool call becomes a step of the kind `resolve_entity`, `sparql_query`, `previous_results`,
+`papers` or `clarification`. A call to a tool that doesn't exist is treated as a clarification.
+
 **How the loop ends:**
 
 - **The LLM stops calling tools.** If it ran queries, a separate `generate_answer()` call writes the
@@ -64,13 +91,18 @@ JSON files in `backend/src/resources/llm_tools/`.
 - **The iteration limit is reached.** `generate_answer()` forces an answer from whatever data exists.
 - **The LLM calls `ask_clarification`.** Its question is returned as the normal `answer`; there is
   no separate flag.
+- **`use_previous_results` finds no data.** The step fails and a fixed text is the answer.
 
 **Errors inside the loop:**
 
 - **Bad query** (GraphDB answers HTTP 400 → `SparqlQueryException`): the error text goes back to the
   LLM as the tool result, so it can fix the query and retry.
+- **No Lucene connector** (`resolve_entity` fails with a `SparqlQueryException`): the step fails and
+  the LLM is told to match labels with a query instead.
 - **Infrastructure errors** (`SparqlDatabaseException`, `SparqlDatabaseStatusCode`): these abort the
   request.
+- **Any exception** that aborts the turn (a bug included) sets the assistant message to `error`
+  first; the step that was running is closed as failed, earlier steps stay as they are.
 
 **Model quirks:**
 
@@ -105,9 +137,8 @@ tables, and there are no migrations yet: after a schema change the database has 
   of that turn's last successful `sparql_query` step.
 - **Transactions:** every `ChatRepository` method ends its transaction, reads included.
 
-For now a turn writes a single step, the last query it executed. Storing every tool call as it
-happens comes with the event generator
-([ticket 04](./plans/backend-rework/04-chat-service-generator.md)).
+A `previous_results` step stores no `result` of its own (it would duplicate the referenced step);
+its `args` name the turn it resolved to. A `papers` or `clarification` step has no result either.
 
 Because history lives on the server, a client only has to remember the `session_id`.
 
@@ -116,6 +147,7 @@ Because history lives on the server, a client only has to remember the `session_
 The API maps domain exceptions to status codes and returns
 `{ "status": "error", "error": "...", "detail": "..." }`:
 
+- **404** — unknown session.
 - **502** — an upstream service answered with an error (bad SPARQL status, empty LLM output).
 - **503** — the LLM API or GraphDB is unreachable.
 
