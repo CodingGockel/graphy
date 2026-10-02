@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from src.models.events import ErrorEvent, ErrorKind
 from src.models.schemas import ErrorResponse
 from src.util.exceptions import (
     LLMServiceException,
@@ -20,6 +21,27 @@ def _err(status_code: int, error: str, detail: str | None = None) -> JSONRespons
         status_code=status_code,
         content=ErrorResponse(error=error, detail=detail).model_dump(),
     )
+
+
+# Errors inside a chat stream are sent as an `error` event instead of a status code.
+# Keep in sync with the handlers below.
+_STREAM_ERROR_KINDS: tuple[tuple[type[Exception], ErrorKind], ...] = (
+    (LLMServiceException, "llm_unavailable"),       # 503
+    (LLMNoContentException, "llm_no_content"),      # 502
+    (SparqlDatabaseException, "sparql_unavailable"),  # 503
+    (SparqlDatabaseStatusCode, "sparql_failed"),    # 502
+    (SparqlQueryException, "sparql_failed"),        # 502
+)
+
+
+def stream_error_event(exc: Exception) -> ErrorEvent:
+    """The `error` event for an exception that ended a chat stream."""
+    for exc_type, kind in _STREAM_ERROR_KINDS:
+        if isinstance(exc, exc_type):
+            logger.warning(f"Chat stream failed ({kind}): {exc}")
+            return ErrorEvent(kind=kind, message=str(exc))
+    logger.error("Unhandled exception in chat stream", exc_info=exc)
+    return ErrorEvent(kind="internal", message="Internal server error")
 
 
 def register_exception_handlers(app: FastAPI) -> None:

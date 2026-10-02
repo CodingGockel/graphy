@@ -162,6 +162,15 @@ class TestWrites:
         assert added.id == step_id
         assert (added.ordinal, added.kind, added.ok) == (2, "sparql_query", None)
 
+    async def test_abort_message_only_touches_a_running_message(self):
+        repo, session = _make_repo()
+
+        await repo.abort_message(uuid.uuid4(), content="partial", thinking=None)
+
+        sql, params = _sql(session)
+        assert "messages.status" in sql.split("WHERE")[1]
+        assert {"running", "aborted", "partial"} <= set(params.values())
+
     async def test_set_title_reports_whether_the_session_existed(self):
         repo, _ = _make_repo(rowcount=0)
         assert await repo.set_title(uuid.uuid4(), "Title", manual=True) is False
@@ -187,6 +196,7 @@ class TestTransactions:
             lambda r: r.next_turn(uuid.uuid4()),
             lambda r: r.add_message(uuid.uuid4(), 1, "user", "hi", "complete"),
             lambda r: r.finish_message(uuid.uuid4(), "answer", None, "complete"),
+            lambda r: r.abort_message(uuid.uuid4(), "partial", None),
             lambda r: r.start_step(uuid.uuid4(), 1, "papers", {}),
             lambda r: r.finish_step(uuid.uuid4(), True, None, None, None, 5),
             lambda r: r.get_step_result(uuid.uuid4()),

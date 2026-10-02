@@ -148,6 +148,19 @@ class ChatRepository:
         )
         await self._session.commit()
 
+    async def abort_message(
+        self, message_id: uuid.UUID, content: str, thinking: str | None
+    ) -> None:
+        """Mark a turn the client cancelled as `aborted`, keeping what it produced so
+        far. Only a `running` message: a turn that finished just before the
+        cancellation arrived stays as it is."""
+        await self._session.execute(
+            update(Message)
+            .where(Message.id == message_id, Message.status == "running")
+            .values(content=content, thinking=thinking, status="aborted")
+        )
+        await self._session.commit()
+
     # --- steps ------------------------------------------------------------
 
     async def start_step(
