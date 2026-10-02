@@ -14,7 +14,12 @@ StepKind = Literal[
     "resolve_entity", "sparql_query", "previous_results", "papers", "clarification"
 ]
 ErrorKind = Literal[
-    "llm_unavailable", "llm_no_content", "sparql_unavailable", "sparql_failed", "internal"
+    "llm_unavailable",
+    "llm_no_content",
+    "sparql_unavailable",
+    "sparql_failed",
+    "session_not_found",
+    "internal",
 ]
 
 

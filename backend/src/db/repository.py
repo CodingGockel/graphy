@@ -98,15 +98,6 @@ class ChatRepository:
         await self._session.commit()
         return result.rowcount > 0  # type: ignore
 
-    async def touch_session(self, session_id: uuid.UUID) -> None:
-        """Bump `updated_at` (the sidebar sorts by it)."""
-        await self._session.execute(
-            update(ChatSession)
-            .where(ChatSession.id == session_id)
-            .values(updated_at=func.now())
-        )
-        await self._session.commit()
-
     async def delete_session(self, session_id: uuid.UUID) -> bool:
         """Delete the session row (cascade removes its messages and their steps).
         Returns whether a session with that id existed."""
@@ -118,47 +109,65 @@ class ChatRepository:
 
     # --- messages ---------------------------------------------------------
 
-    async def next_turn(self, session_id: uuid.UUID) -> int:
+    async def start_turn(self, session_id: uuid.UUID, content: str) -> uuid.UUID:
+        """Open the next turn of the session: the user message and a `running`
+        assistant message, whose id is returned. One transaction, so a turn never
+        consists of a question alone."""
         result = await self._session.execute(
             select(func.coalesce(func.max(Message.turn), 0)).where(
                 Message.session_id == session_id
             )
         )
         turn = result.scalar_one() + 1
-        await self._session.commit()
-        return turn
-
-    async def add_message(
-        self,
-        session_id: uuid.UUID,
-        turn: int,
-        role: str,
-        content: str,
-        status: str,
-    ) -> uuid.UUID:
-        message = Message(
+        user = Message(
             id=uuid.uuid4(),
             session_id=session_id,
             turn=turn,
-            role=role,
+            role="user",
             content=content,
-            status=status,
+            status="complete",
         )
-        self._session.add(message)
+        assistant = Message(
+            id=uuid.uuid4(),
+            session_id=session_id,
+            turn=turn,
+            role="assistant",
+            content="",
+            status="running",
+        )
+        self._session.add_all([user, assistant])
         await self._session.commit()
-        return message.id
+        return assistant.id
 
-    async def finish_message(
+    async def complete_turn(
         self,
+        session_id: uuid.UUID,
         message_id: uuid.UUID,
         content: str,
         thinking: str | None,
-        status: str,
     ) -> None:
+        """Store the answer as `complete` and bump the session's `updated_at` (the
+        sidebar sorts by it). One transaction: a turn is not left half finished."""
         await self._session.execute(
             update(Message)
             .where(Message.id == message_id)
-            .values(content=content, thinking=thinking, status=status)
+            .values(content=content, thinking=thinking, status="complete")
+        )
+        await self._session.execute(
+            update(ChatSession)
+            .where(ChatSession.id == session_id)
+            .values(updated_at=func.now())
+        )
+        await self._session.commit()
+
+    async def fail_message(self, message_id: uuid.UUID, content: str) -> None:
+        """Mark a turn that ended with an exception as `error`, keeping what it
+        produced so far. Only a `running` message: a turn that was already stored
+        as complete stays as it is."""
+        await self._session.execute(
+            update(Message)
+            .where(Message.id == message_id, Message.status == "running")
+            .values(content=content, status="error")
         )
         await self._session.commit()
 

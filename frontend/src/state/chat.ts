@@ -12,7 +12,8 @@ export interface ChatEntry {
 
 export interface ChatFailure {
   error: ApiError
-  retry: () => void
+  /** Null if the session no longer exists: only a new session helps then, not a retry. */
+  retry: (() => void) | null
 }
 
 export const messages = ref<ChatEntry[]>([])
@@ -53,6 +54,13 @@ function visibleMessages(history: MessageOut[]): MessageOut[] {
   return history.filter((m) => !failedTurns.has(m.turn) && (m.role === 'user' || m.content !== ''))
 }
 
+/** The backend no longer knows this session: forget it and offer a new one. */
+function sessionGone(id: string, error: ApiError): void {
+  removeSession(id)
+  if (activeId.value === id) activeId.value = null
+  chatError.value = { error, retry: null }
+}
+
 function showSession(session: SessionDetail): void {
   activeId.value = session.id
   messages.value = visibleMessages(session.messages).map((m) => entry(m.role, m.content))
@@ -74,7 +82,10 @@ export async function openSession(id: string): Promise<void> {
     const session = await api.getSession(id)
     if (token === requestToken) showSession(session)
   } catch (err) {
-    if (token === requestToken) chatError.value = { error: toApiError(err), retry: () => void openSession(id) }
+    if (token !== requestToken) return
+    const error = toApiError(err)
+    if (error.status === 404) sessionGone(id, error)
+    else chatError.value = { error, retry: () => void openSession(id) }
   } finally {
     if (token === requestToken) loadingHistory.value = false
   }
@@ -105,6 +116,8 @@ export async function send(text: string): Promise<void> {
   if (!message || pending.value || loadingHistory.value) return
 
   aborted.value = false
+  // The history still shown belongs to a session that is gone; the new one starts empty.
+  if (chatError.value && !chatError.value.retry) messages.value = []
   chatError.value = null
   const question = entry('user', message)
   messages.value.push(question)
@@ -113,7 +126,11 @@ export async function send(text: string): Promise<void> {
   const token = ++requestToken
   const sessionId = activeId.value
   // What the stream has produced so far.
-  const turn: { answer: ChatEntry | null; failure: ApiError | null } = { answer: null, failure: null }
+  const turn: { started: boolean; answer: ChatEntry | null; failure: ApiError | null } = {
+    started: false,
+    answer: null,
+    failure: null,
+  }
 
   try {
     await api.chat(
@@ -123,6 +140,7 @@ export async function send(text: string): Promise<void> {
         if (token !== requestToken) return
         switch (event.event) {
           case 'session':
+            turn.started = true
             touchSession(event.session_id, makeTitle(message))
             activeId.value = event.session_id
             break
@@ -148,17 +166,16 @@ export async function send(text: string): Promise<void> {
     if (isAbortError(err)) {
       // A partial answer stays visible.
       aborted.value = true
+      // Stopped before the new session was announced: its ID is unknown, so the question
+      // cannot be part of what follows.
+      if (!sessionId && !turn.started) messages.value = messages.value.filter((m) => m.id !== question.id)
     } else {
       const error = toApiError(err)
-      // The backend no longer knows this session: forget it, "retry" starts a new one.
-      if (error.status === 404 && sessionId) {
-        removeSession(sessionId)
-        if (activeId.value === sessionId) activeId.value = null
-      }
       // Drop the unanswered question (and a partial answer); "retry" sends it again.
       const dropped = [question.id, turn.answer?.id]
       messages.value = messages.value.filter((m) => !dropped.includes(m.id))
-      chatError.value = { error, retry: () => void send(message) }
+      if (error.status === 404 && sessionId) sessionGone(sessionId, error)
+      else chatError.value = { error, retry: () => void send(message) }
     }
   } finally {
     if (token === requestToken) {

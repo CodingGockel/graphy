@@ -62,6 +62,7 @@
     "loadingHistory": "Loading history …",
     "aborted": "Request cancelled.",
     "retry": "Try again",
+    "sessionGone": "This session no longer exists.",
     "details": "Details"
   },
   "errors": {

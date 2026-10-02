@@ -22,6 +22,7 @@ from src.services.chat_service import TurnState
 from src.util.exceptions import (
     LLMNoContentException,
     LLMServiceException,
+    SessionNotFoundException,
     SparqlDatabaseException,
     SparqlDatabaseStatusCode,
 )
@@ -161,6 +162,7 @@ class TestChatStream:
             (LLMNoContentException("empty"), "llm_no_content"),
             (SparqlDatabaseException("graphdb down"), "sparql_unavailable"),
             (SparqlDatabaseStatusCode("HTTP 500"), "sparql_failed"),
+            (SessionNotFoundException("deleted meanwhile"), "session_not_found"),
         ],
     )
     def test_domain_exception_becomes_an_error_event(self, client, repo, error, kind):

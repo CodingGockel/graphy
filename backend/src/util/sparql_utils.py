@@ -69,8 +69,10 @@ def count_rows(results: Any) -> int | None:
 
 def strip_think(text: str) -> str:
     """Remove <think>...</think> reasoning blocks that some models emit before their
-    actual output. Used for both query extraction and the final natural-language answer."""
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    actual output, including reasoning that only ends with a lone </think>. Used for
+    query extraction, the final natural-language answer and the LLM history."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    return text.rsplit("</think>", 1)[-1].strip()
 
 
 def extract_sparql_query(llm_output: str) -> str:

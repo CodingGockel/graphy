@@ -7,7 +7,7 @@ import GraphLoader from './GraphLoader.vue'
 import ChatMessage from './ChatMessage.vue'
 import { useI18n } from '../i18n'
 import { errorHeadline } from '../lib/errors'
-import { aborted, chatError, loadingHistory, messages, pending, send, stop } from '../state/chat'
+import { aborted, chatError, loadingHistory, messages, newSession, pending, send, stop } from '../state/chat'
 
 const { t } = useI18n()
 const scroller = ref<HTMLElement | null>(null)
@@ -51,7 +51,7 @@ watch(
         <p v-if="aborted" class="status">{{ t('chat.aborted') }}</p>
 
         <div v-if="chatError" class="error" role="alert">
-          <p class="headline">{{ errorHeadline(chatError.error) }}</p>
+          <p class="headline">{{ chatError.retry ? errorHeadline(chatError.error) : t('chat.sessionGone') }}</p>
           <details v-if="chatError.error.status !== 0" class="details">
             <summary>{{ t('chat.details') }}</summary>
             <p>
@@ -60,7 +60,10 @@ watch(
             </p>
             <pre v-if="chatError.error.detail">{{ chatError.error.detail }}</pre>
           </details>
-          <button type="button" class="btn" @click="chatError.retry()">{{ t('chat.retry') }}</button>
+          <button v-if="chatError.retry" type="button" class="btn" @click="chatError.retry?.()">
+            {{ t('chat.retry') }}
+          </button>
+          <button v-else type="button" class="btn" @click="newSession()">{{ t('sidebar.newSession') }}</button>
         </div>
       </div>
     </div>

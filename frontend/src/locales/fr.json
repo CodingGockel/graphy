@@ -62,6 +62,7 @@
     "loadingHistory": "Chargement de l’historique …",
     "aborted": "Requête annulée.",
     "retry": "Réessayer",
+    "sessionGone": "Cette session n’existe plus.",
     "details": "Détails"
   },
   "errors": {

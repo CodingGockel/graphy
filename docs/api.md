@@ -83,6 +83,7 @@ How a client should use it:
    | `llm_no_content` | The LLM returned nothing usable. | `502` |
    | `sparql_unavailable` | GraphDB is unreachable. | `503` |
    | `sparql_failed` | GraphDB answered with an error. | `502` |
+   | `session_not_found` | The session was deleted while the turn started. | `404` |
    | `internal` | Anything else (logged on the server). | `500` |
 
    A stream that ends without `done` or `error` is a failure as well (connection lost).

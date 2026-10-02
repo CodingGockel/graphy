@@ -8,6 +8,7 @@ const EVENT_STATUS: Record<ChatErrorKind, number> = {
   llm_no_content: 502,
   sparql_unavailable: 503,
   sparql_failed: 502,
+  session_not_found: 404,
   internal: 500,
 }
 

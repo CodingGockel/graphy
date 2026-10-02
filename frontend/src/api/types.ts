@@ -13,6 +13,7 @@ export type ChatErrorKind =
   | 'llm_no_content'
   | 'sparql_unavailable'
   | 'sparql_failed'
+  | 'session_not_found'
   | 'internal'
 
 /**

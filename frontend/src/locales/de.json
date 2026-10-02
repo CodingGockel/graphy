@@ -62,6 +62,7 @@
     "loadingHistory": "Lade Verlauf …",
     "aborted": "Anfrage abgebrochen.",
     "retry": "Erneut versuchen",
+    "sessionGone": "Diese Session existiert nicht mehr.",
     "details": "Details"
   },
   "errors": {

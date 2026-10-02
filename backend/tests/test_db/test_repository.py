@@ -111,14 +111,28 @@ class TestGetFullHistory:
         assert "LIMIT" not in sql
 
 
-class TestNextTurn:
-    async def test_is_max_plus_one(self):
-        repo, _ = _make_repo(scalar=4)
-        assert await repo.next_turn(uuid.uuid4()) == 5
+class TestStartTurn:
+    async def test_writes_question_and_running_answer_in_one_transaction(self):
+        repo, session = _make_repo(scalar=4)
+        sid = uuid.uuid4()
+
+        message_id = await repo.start_turn(sid, "my question")
+
+        user, assistant = session.add_all.call_args.args[0]
+        assert (user.role, user.turn, user.status, user.content) == (
+            "user", 5, "complete", "my question",
+        )
+        assert (assistant.role, assistant.turn, assistant.status) == ("assistant", 5, "running")
+        assert user.session_id == assistant.session_id == sid
+        assert assistant.id == message_id
+        session.commit.assert_awaited_once()
 
     async def test_first_turn_is_one(self):
         repo, session = _make_repo(scalar=0)  # coalesce(max(turn), 0)
-        assert await repo.next_turn(uuid.uuid4()) == 1
+
+        await repo.start_turn(uuid.uuid4(), "hi")
+
+        assert session.add_all.call_args.args[0][0].turn == 1
         assert "coalesce" in _sql(session)[0].lower()
 
 
@@ -138,17 +152,29 @@ class TestGetStepResult:
 
 
 class TestWrites:
-    async def test_add_message_returns_the_new_id(self):
+    async def test_complete_turn_stores_the_answer_and_touches_the_session(self):
         repo, session = _make_repo()
 
-        message_id = await repo.add_message(
-            session_id=uuid.uuid4(), turn=1, role="user", content="hi", status="complete"
-        )
+        await repo.complete_turn(uuid.uuid4(), uuid.uuid4(), content="answer", thinking=None)
 
-        added = session.add.call_args.args[0]
-        assert isinstance(added, Message)
-        assert added.id == message_id
-        assert (added.turn, added.role, added.status) == (1, "user", "complete")
+        statements = [
+            str(c.args[0].compile(dialect=postgresql.dialect()))
+            for c in session.execute.await_args_list
+        ]
+        assert statements[0].startswith("UPDATE messages")
+        assert statements[1].startswith("UPDATE sessions")
+        assert "updated_at" in statements[1]
+        # one transaction for both
+        session.commit.assert_awaited_once()
+
+    async def test_fail_message_only_touches_a_running_message(self):
+        repo, session = _make_repo()
+
+        await repo.fail_message(uuid.uuid4(), content="partial")
+
+        sql, params = _sql(session)
+        assert "messages.status" in sql.split("WHERE")[1]
+        assert {"running", "error", "partial"} <= set(params.values())
 
     async def test_start_step_returns_the_new_id(self):
         repo, session = _make_repo()
@@ -207,11 +233,10 @@ class TestTransactions:
             lambda r: r.get_sessions([uuid.uuid4()]),
             lambda r: r.count_messages([uuid.uuid4()]),
             lambda r: r.set_title(uuid.uuid4(), "t", manual=False),
-            lambda r: r.touch_session(uuid.uuid4()),
             lambda r: r.delete_session(uuid.uuid4()),
-            lambda r: r.next_turn(uuid.uuid4()),
-            lambda r: r.add_message(uuid.uuid4(), 1, "user", "hi", "complete"),
-            lambda r: r.finish_message(uuid.uuid4(), "answer", None, "complete"),
+            lambda r: r.start_turn(uuid.uuid4(), "hi"),
+            lambda r: r.complete_turn(uuid.uuid4(), uuid.uuid4(), "answer", None),
+            lambda r: r.fail_message(uuid.uuid4(), "partial"),
             lambda r: r.abort_message(uuid.uuid4(), "partial", None),
             lambda r: r.start_step(uuid.uuid4(), 1, "papers", {}),
             lambda r: r.finish_step(uuid.uuid4(), True, None, None, None, 5),

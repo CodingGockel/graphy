@@ -22,13 +22,14 @@ from src.util.sparql_utils import (
     parse_sparql_bindings,
     results_to_json,
     results_to_text,
+    strip_think,
 )
 from src.db.models import Message
 from src.db.repository import ChatRepository, reusable_data
 from src.services.llm_service import LLMService, ToolCallResult
 from src.services.sparql_service import SparqlService
 from src.services.lucene_service import LuceneService
-from src.util.exceptions import SessionNotFoundException, SparqlQueryException
+from src.util.exceptions import AppException, SessionNotFoundException, SparqlQueryException
 from src.util.config import Settings
 from src.util.logger import logger
 from src.util.llm_utils import load_tools, load_prompt
@@ -55,7 +56,9 @@ def _build_history(
         if msg.role == "user":
             llm_messages.append({"role": "user", "content": msg.content})
         elif msg.role == "assistant":
-            llm_messages.append({"role": "assistant", "content": msg.content})
+            # An answer written without tools is stored with its <think> block
+            # (the frontend shows it); the model must not get it back as history.
+            llm_messages.append({"role": "assistant", "content": strip_think(msg.content)})
             data = reusable_data(msg)
             if data is not None:
                 turn_map[msg.turn] = TurnData(step_id=data[0], query=data[1])
@@ -172,6 +175,12 @@ def _load_phenobs_papers_content() -> str:
     )
 
 
+def _step_error(exc: Exception) -> str:
+    """The error text of a step that raised. It is stored and sent to the client, so
+    only a domain exception shows its message."""
+    return str(exc) if isinstance(exc, AppException) else "Internal server error"
+
+
 NO_PREVIOUS_DATA_ANSWER = (
     "There are no previous query results available to fall back on. "
     "Please ask a new question."
@@ -222,21 +231,7 @@ class ChatService:
         history, turn_map = _build_history(history_msgs)
 
         # 3. Persist the user message and open the assistant message of the turn
-        turn_number = await repo.next_turn(session_id)
-        await repo.add_message(
-            session_id=session_id,
-            turn=turn_number,
-            role="user",
-            content=message,
-            status="complete",
-        )
-        message_id = await repo.add_message(
-            session_id=session_id,
-            turn=turn_number,
-            role="assistant",
-            content="",
-            status="running",
-        )
+        message_id = await repo.start_turn(session_id, message)
         state.message_id = message_id
         yield SessionEvent(session_id=session_id, message_id=message_id, title=title)
 
@@ -307,12 +302,10 @@ class ChatService:
             except Exception as e:
                 # Infrastructure failure: close the step, then abort the turn.
                 duration_ms = int((time.monotonic() - started) * 1000)
-                await repo.finish_step(
-                    step_id, ok=False, count=None, result=None, error=str(e),
-                    duration_ms=duration_ms,
-                )
+                error = _step_error(e)
+                await self._close_failed_step(repo, step_id, error, duration_ms)
                 yield StepFinishedEvent(
-                    step_id=step_id, ok=False, error=str(e), duration_ms=duration_ms
+                    step_id=step_id, ok=False, error=error, duration_ms=duration_ms
                 )
                 raise
             duration_ms = int((time.monotonic() - started) * 1000)
@@ -356,9 +349,23 @@ class ChatService:
         state.answer = answer
         yield AnswerEvent(delta=answer)
 
-        await repo.finish_message(message_id, content=answer, thinking=None, status="complete")
-        await repo.touch_session(session_id)
+        await repo.complete_turn(session_id, message_id, content=answer, thinking=None)
         yield DoneEvent(message_id=message_id, row_count=row_count)
+
+    async def _close_failed_step(
+        self, repo: ChatRepository, step_id: uuid.UUID, error: str, duration_ms: int
+    ) -> None:
+        """Store a step that raised as failed. Never raises: the original exception
+        is the one the caller has to see."""
+        try:
+            # The failure may have been a DB error that left the transaction aborted.
+            await repo.rollback()
+            await repo.finish_step(
+                step_id, ok=False, count=None, result=None, error=error,
+                duration_ms=duration_ms,
+            )
+        except Exception:
+            logger.exception(f"Could not close failed step {step_id}")
 
     async def _mark_failed(self, repo: ChatRepository, state: TurnState) -> None:
         """Set the assistant message to `error`. Never raises: the original exception
@@ -368,9 +375,7 @@ class ChatService:
         try:
             # The failure may have been a DB error that left the transaction aborted.
             await repo.rollback()
-            await repo.finish_message(
-                state.message_id, content=state.answer, thinking=None, status="error"
-            )
+            await repo.fail_message(state.message_id, content=state.answer)
         except Exception:
             logger.exception(f"Could not mark message {state.message_id} as failed")
 

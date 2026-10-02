@@ -37,7 +37,7 @@ class ChatSession(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    # Bumped explicitly (ChatRepository.touch_session) when a turn completes.
+    # Bumped explicitly (ChatRepository.complete_turn) when a turn completes.
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

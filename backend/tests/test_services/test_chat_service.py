@@ -51,8 +51,7 @@ def repo():
     repo.create_session = AsyncMock(return_value=uuid.uuid4())
     repo.get_sessions = AsyncMock(return_value=[SimpleNamespace(title=None)])
     repo.get_history = AsyncMock(return_value=[])
-    repo.next_turn = AsyncMock(return_value=1)
-    repo.add_message = AsyncMock(side_effect=lambda **kwargs: uuid.uuid4())
+    repo.start_turn = AsyncMock(side_effect=lambda *args, **kwargs: uuid.uuid4())
     repo.start_step = AsyncMock(side_effect=lambda *args, **kwargs: uuid.uuid4())
     repo.get_step_result = AsyncMock(return_value=None)
     return repo
@@ -157,22 +156,17 @@ class TestSession:
             await _run(service, repo, session_id=uuid.uuid4())
 
         repo.create_session.assert_not_awaited()
-        repo.add_message.assert_not_awaited()
+        repo.start_turn.assert_not_awaited()
         llm.chat_with_tools.assert_not_awaited()
 
-    async def test_user_and_running_assistant_message_are_written(self, chat_service, repo):
+    async def test_turn_is_opened_with_the_question(self, chat_service, repo):
         service, llm, _, _ = chat_service
         llm.chat_with_tools.side_effect = [_answer_turn("Hello.")]
-        repo.next_turn.return_value = 3
 
-        await _run(service, repo, message="my question")
+        events = await _run(service, repo, message="my question")
 
-        user, assistant = [c.kwargs for c in repo.add_message.await_args_list]
-        assert (user["role"], user["turn"], user["status"]) == ("user", 3, "complete")
-        assert user["content"] == "my question"
-        assert (assistant["role"], assistant["turn"], assistant["status"]) == (
-            "assistant", 3, "running",
-        )
+        # Question and running answer are written together (ChatRepository.start_turn).
+        repo.start_turn.assert_awaited_once_with(events[0].session_id, "my question")
 
 
 class TestPlainAnswer:
@@ -202,11 +196,11 @@ class TestPlainAnswer:
         state = TurnState()
         events = await _run(service, repo, state=state)
 
-        finish = repo.finish_message.await_args
-        assert finish.args[0] == state.message_id
-        assert finish.kwargs["content"] == "Hello."
-        assert finish.kwargs["status"] == "complete"
-        repo.touch_session.assert_awaited_once_with(events[0].session_id)
+        # Answer and session timestamp are stored together (ChatRepository.complete_turn).
+        repo.complete_turn.assert_awaited_once_with(
+            events[0].session_id, state.message_id, content="Hello.", thinking=None
+        )
+        repo.fail_message.assert_not_awaited()
 
 
 class TestQuery:
@@ -426,7 +420,7 @@ class TestUsePreviousResults:
         assert _answer(events) == NO_PREVIOUS_DATA_ANSWER
         assert llm.chat_with_tools.await_count == 1
         llm.generate_answer.assert_not_awaited()
-        assert repo.finish_message.await_args.kwargs["status"] == "complete"
+        repo.complete_turn.assert_awaited_once()
 
     async def test_reused_data_stays_reusable_in_later_turns(self, chat_service, repo):
         service, llm, _, _ = chat_service
@@ -578,11 +572,33 @@ class TestFailures:
         assert (second["ok"], second["error"]) == (False, "graphdb down")
         assert events[-1].ok is False
 
-        repo.finish_message.assert_awaited_once()
-        finish = repo.finish_message.await_args
-        assert finish.args[0] == state.message_id
-        assert finish.kwargs["status"] == "error"
-        repo.touch_session.assert_not_awaited()
+        repo.fail_message.assert_awaited_once_with(state.message_id, content="")
+        repo.complete_turn.assert_not_awaited()
+
+    async def test_unexpected_step_error_is_not_shown(self, chat_service, repo):
+        service, llm, sparql, _ = chat_service
+        llm.chat_with_tools.side_effect = [_tool_turn("execute_sparql_query", {"query": QUERY})]
+        sparql.execute.side_effect = RuntimeError("secret detail")
+
+        events = await _run_until_error(service, repo, RuntimeError)
+
+        # Stored and sent: only a domain exception shows its message.
+        assert repo.finish_step.await_args.kwargs["error"] == "Internal server error"
+        assert events[-1].error == "Internal server error"
+
+    async def test_failing_to_close_the_step_does_not_hide_the_original_error(
+        self, chat_service, repo
+    ):
+        service, llm, sparql, _ = chat_service
+        llm.chat_with_tools.side_effect = [_tool_turn("execute_sparql_query", {"query": QUERY})]
+        sparql.execute.side_effect = SparqlDatabaseException("graphdb down")
+        repo.finish_step.side_effect = ConnectionError("db gone")
+
+        events = await _run_until_error(service, repo, SparqlDatabaseException)
+
+        # The step is still reported as finished, and the message is marked.
+        assert _names(events) == ["session", "step_started", "step_finished"]
+        repo.fail_message.assert_awaited_once()
 
     async def test_unexpected_exception_marks_message_as_error_too(self, chat_service, repo):
         service, llm, sparql, _ = chat_service
@@ -596,7 +612,7 @@ class TestFailures:
 
         assert _names(events) == ["session", "step_started", "step_finished"]
         assert repo.finish_step.await_args.kwargs["ok"] is True
-        assert repo.finish_message.await_args.kwargs["status"] == "error"
+        repo.fail_message.assert_awaited_once()
         # a DB error may have left the transaction aborted
         repo.rollback.assert_awaited_once()
 
@@ -611,14 +627,14 @@ class TestFailures:
         events = await _run_until_error(service, repo, RuntimeError)
 
         assert "answer" not in _names(events)
-        assert repo.finish_message.await_args.kwargs["status"] == "error"
+        repo.fail_message.assert_awaited_once()
 
     async def test_failing_to_mark_the_message_does_not_hide_the_original_error(
         self, chat_service, repo
     ):
         service, llm, _, _ = chat_service
         llm.chat_with_tools.side_effect = RuntimeError("a bug")
-        repo.finish_message.side_effect = ConnectionError("db gone")
+        repo.fail_message.side_effect = ConnectionError("db gone")
 
         await _run_until_error(service, repo, RuntimeError)
 
@@ -638,6 +654,19 @@ class TestHistory:
         assert [(m["role"], m["content"]) for m in sent[1:]] == [
             ("user", "q1"), ("assistant", "a1"), ("user", "q2"),
         ]
+
+    async def test_reasoning_of_an_earlier_answer_is_not_sent_back(self, chat_service, repo):
+        service, llm, _, _ = chat_service
+        repo.get_history.return_value = [
+            make_db_message("user", "q1", turn=1),
+            make_db_message("assistant", "<think>let me see</think>a1", turn=1),
+        ]
+        llm.chat_with_tools.side_effect = [_answer_turn("ok")]
+
+        await _run(service, repo, message="q2")
+
+        sent = llm.chat_with_tools.await_args.args[0]
+        assert sent[2] == {"role": "assistant", "content": "a1"}
 
     async def test_only_complete_turns_are_requested(self, chat_service, repo):
         # Non-complete turns are filtered by the repository (get_history returns

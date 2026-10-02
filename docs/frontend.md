@@ -31,8 +31,9 @@ changes in [plans/streaming-rework.md](./plans/streaming-rework.md).
   - **`state/chat.ts`** adopts the session from the `session` event, appends `answer` deltas to
     the assistant entry and turns an `error` event into the same error box (with retry) as an
     HTTP error (`lib/errors.ts` maps its `kind`). Steps and reasoning events are ignored for now.
-    "Stop" aborts the fetch; a partial answer stays visible. A `404` on send removes the stale
-    session from the local list.
+    "Stop" aborts the fetch; a partial answer stays visible. A `404` on send or when opening a
+    session removes the stale session from the local list; the error box then offers "New
+    session" instead of a retry, which could not succeed.
 
 ## Structure
 

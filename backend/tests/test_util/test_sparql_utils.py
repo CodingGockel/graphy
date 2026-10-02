@@ -169,3 +169,6 @@ class TestStripThink:
 
     def test_leaves_text_without_think(self):
         assert strip_think("just text") == "just text"
+
+    def test_reasoning_ending_with_a_lone_closing_tag_is_removed(self):
+        assert strip_think("reasoning\n</think>\nvisible") == "visible"

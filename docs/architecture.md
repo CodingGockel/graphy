@@ -41,10 +41,11 @@ Requests flow **router → service → LLMService / SparqlService / LuceneServic
    `200` and the response is an event stream.
 2. **History:** the last `CHAT_HISTORY_DEPTH` complete turns are loaded from PostgreSQL.
 3. **Messages:** the user message is stored, and the assistant message is created with status
-   `running`.
+   `running`, both in one transaction.
 4. **Tool loop:** the LLM works on the question (below). Every tool call is stored as a step when
    it starts and updated when it finishes.
-5. **Answer:** the answer is stored and the message set to `complete`.
+5. **Answer:** the answer is stored, the message set to `complete` and the session's
+   `updated_at` bumped, in one transaction.
 
 Each of these steps reaches the client as an event while it happens.
 
@@ -117,7 +118,9 @@ Each tool call becomes a step of the kind `resolve_entity`, `sparql_query`, `pre
 - **Infrastructure errors** (`SparqlDatabaseException`, `SparqlDatabaseStatusCode`): these abort the
   turn; the client gets an `error` event.
 - **Any exception** that aborts the turn (a bug included) sets the assistant message to `error`
-  first; the step that was running is closed as failed, earlier steps stay as they are.
+  first; the step that was running is closed as failed, earlier steps stay as they are. The
+  step's error text is the exception message only for a domain exception, otherwise a generic
+  "Internal server error". A message that was already stored as `complete` is not changed.
 
 **Model quirks:**
 
@@ -143,7 +146,8 @@ tables, and there are no migrations yet: after a schema change the database has 
   `(session_id, turn, role)` is unique, so two tabs sending into the same session at once fail
   loudly instead of mixing up the history.
 - **Status:** an assistant message is `running`, `complete`, `aborted` or `error`; user messages are
-  always `complete`. Only complete turns are sent to the LLM as history.
+  always `complete`. Only complete turns are sent to the LLM as history, with any `<think>`
+  reasoning removed from the answers.
 - **Steps:** `kind` is `resolve_entity`, `sparql_query`, `previous_results`, `papers` or
   `clarification`; `(message_id, ordinal)` is unique. `count` is the number of rows or candidates.
   `result` holds the full result (for a query: the SPARQL JSON) and is never loaded together with

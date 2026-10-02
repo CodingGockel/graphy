@@ -32,6 +32,9 @@ _STREAM_ERROR_KINDS: tuple[tuple[type[Exception], ErrorKind], ...] = (
     (SparqlDatabaseException, "sparql_unavailable"),  # 503
     (SparqlDatabaseStatusCode, "sparql_failed"),    # 502
     (SparqlQueryException, "sparql_failed"),        # 502
+    # The route checks the session before the stream starts; this is the session
+    # being deleted in between.
+    (SessionNotFoundException, "session_not_found"),  # 404
 )
 
 
