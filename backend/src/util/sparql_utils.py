@@ -80,8 +80,12 @@ def ensure_limit(query: str, default_limit: int = 200) -> str:
     return f"{query.rstrip()}\nLIMIT {int(default_limit)}"
 
 
+# Forbidden operations as whole words, in any case. A keyword directly preceded by
+# `?`, `$`, `:` or a word character is a variable or prefixed name (?insertion, ex:delete).
+_FORBIDDEN_KEYWORDS = re.compile(
+    r"(?<![?$:\w])(?:INSERT|DELETE|CONSTRUCT|DROP)\b", re.IGNORECASE
+)
+
+
 def validate_query(llm_output: str) -> bool:
-    invalid_strings: list[str] = ["INSERT", "DELETE", "CONSTRUCT", "DROP"]
-    if any(s in llm_output for s in invalid_strings):
-        return False
-    return True
+    return _FORBIDDEN_KEYWORDS.search(llm_output) is None

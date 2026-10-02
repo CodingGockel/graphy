@@ -13,7 +13,9 @@
 
 Other folders:
 
-- [`plans/`](./plans/): plans for upcoming work, e.g. the [streaming rework](./plans/streaming-rework.md).
+- [`plans/`](./plans/): plans for upcoming work, e.g. the [streaming rework](./plans/streaming-rework.md) and its
+  [tickets](./plans/backend-rework/README.md), and the idea for
+  [agent context optimization](./plans/agent-context-optimization.md).
 - [`designs/`](./designs/): logo sources (`graphy-icon.svg`, `graphy-wordmark.svg`) and the PNG drafts.
 - [`presentation/`](./presentation/): Slidev slides from the DataExplorer backend talk.
 

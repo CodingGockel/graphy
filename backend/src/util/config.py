@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     # graphdb settings
     graphdb_base_url: str
     graphdb_repository: str
+    # Timeout (seconds) for SPARQL requests against GraphDB.
+    sparql_timeout: float = 30.0
 
     # DB settings
     database_url: str

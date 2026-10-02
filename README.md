@@ -48,8 +48,3 @@ Details and troubleshooting are in [docs/setup.md](./docs/setup.md).
 ## Documentation
 
 Start at [docs/README.md](./docs/README.md).
-
-## Team
-
-- **Zoom:** https://uni-jena-de.zoom-x.de/j/2197876598 (passcode: 298772)
-- **Discord:** https://discord.gg/pNnfAPnSN

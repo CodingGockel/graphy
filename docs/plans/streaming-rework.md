@@ -3,6 +3,10 @@
 Plan für den Umbau des Backends von der heutigen Einmal-Response auf einen
 Event-Stream, inklusive Neuaufbau der Session-/Chat-Persistenz.
 
+> **Stand 2026-10-01:** Umgesetzt wird dieser Plan über die Tickets in
+> [`backend-rework/`](./backend-rework/README.md). Wo Ticket und Plan voneinander abweichen,
+> gilt das Ticket; die Abweichungen stehen dort im README.
+
 **Ausgangslage:** kein Live-System, keine Nutzdaten, kein Frontend, das die alte API
 konsumiert (das bestehende wird ersetzt). Es muss also **nichts** migriert und nichts
 rückwärtskompatibel gehalten werden.

@@ -15,6 +15,7 @@ def settings_stub() -> SimpleNamespace:
         blablador_sparql_model="test-model",
         graphdb_base_url="http://graphdb.test",
         graphdb_repository="testrepo",
+        sparql_timeout=30.0,
         chat_history_depth=5,
         chat_max_tool_iterations=5,
         system_prompt_path="dummy_system.md",

@@ -84,6 +84,22 @@ class TestValidateQuery:
     def test_rejects_drop(self):
         assert validate_query("DROP GRAPH <g>") is False
 
+    def test_rejects_lowercase_keyword(self):
+        assert validate_query("insert data { <a> <b> <c> }") is False
+
+    def test_allows_variable_named_like_keyword(self):
+        assert validate_query("SELECT ?insertion WHERE { ?s ?p ?insertion }") is True
+
+    def test_allows_keyword_as_variable(self):
+        assert validate_query("SELECT ?delete WHERE { ?s ?p ?delete }") is True
+
+    def test_allows_keyword_as_prefixed_name(self):
+        assert validate_query("SELECT ?s WHERE { ?s ex:drop ?o }") is True
+
+    def test_allows_keyword_inside_longer_word(self):
+        query = 'SELECT ?s WHERE { ?s rdfs:label "Constructa" }'
+        assert validate_query(query) is True
+
 
 class TestExtractSparqlQuery:
     def test_extracts_from_sparql_fence(self):

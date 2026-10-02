@@ -31,6 +31,7 @@ runtime**. To change one, edit `.env` and restart.
 |----------|---------|-------------|
 | `GRAPHDB_BASE_URL` | required | e.g. `http://graphdb-lehre.inf-bb.uni-jena.de:32833` |
 | `GRAPHDB_REPOSITORY` | required | e.g. `SWEPLARGE`. Endpoint: `{BASE_URL}/repositories/{REPOSITORY}` |
+| `SPARQL_TIMEOUT` | `30` | Timeout in seconds for SPARQL requests. The health check uses its own fixed 5 s. |
 
 ### Chat and persistence
 

@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI):
     )
 
     #init httpx client for sparql requests
-    app.state.http_client = httpx.AsyncClient(timeout=10.0)
+    app.state.http_client = httpx.AsyncClient(timeout=settings.sparql_timeout)
 
     #init database
     engine, app.state.db_sessionmaker = await init_db(settings.database_url)

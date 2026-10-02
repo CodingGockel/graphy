@@ -9,11 +9,15 @@ from src.util.sparql_utils import validate_query
 from src.models.schemas import ServiceHealth
 
 
+# The health check is polled by the frontend; it must not wait for a full query timeout.
+HEALTH_CHECK_TIMEOUT = 5.0
+
+
 class SparqlService:
-    def __init__(self, client: httpx.AsyncClient, settings: Settings, timeout: float = 10.0):
+    def __init__(self, client: httpx.AsyncClient, settings: Settings, timeout: float | None = None):
         self._client = client
         self._settings = settings
-        self.timeout = timeout
+        self.timeout = timeout if timeout is not None else settings.sparql_timeout
         self.headers = {
             "Accept": "application/sparql-results+json",
             "Content-Type": "application/x-www-form-urlencoded",
@@ -63,13 +67,13 @@ class SparqlService:
                 self.endpoint,
                 headers=self.headers,
                 params={"query": "ASK {}"},
-                timeout=self.timeout,
+                timeout=HEALTH_CHECK_TIMEOUT,
             )
 
         except httpx.TimeoutException:
             return ServiceHealth(
                 status="down",
-                error=f"timeout after {self.timeout}s",
+                error=f"timeout after {HEALTH_CHECK_TIMEOUT}s",
                 additional_attributes=attr,
             )
 

@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from src.services.sparql_service import SparqlService
+from src.services.sparql_service import HEALTH_CHECK_TIMEOUT, SparqlService
 from src.util.exceptions import (
     SparqlDatabaseException,
     SparqlDatabaseStatusCode,
@@ -40,6 +40,19 @@ class TestExecute:
             settings_stub, get=AsyncMock(return_value=_response(200, "RESULTS"))
         )
         assert await service.execute("SELECT ?s WHERE { ?s ?p ?o }") == "RESULTS"
+
+    async def test_uses_sparql_timeout_from_settings(self, settings_stub):
+        settings_stub.sparql_timeout = 42.0
+        service, client = _make_service(
+            settings_stub, get=AsyncMock(return_value=_response(200, "RESULTS"))
+        )
+        await service.execute("SELECT ?s WHERE { ?s ?p ?o }")
+        assert client.post.call_args.kwargs["timeout"] == 42.0
+
+    async def test_explicit_timeout_overrides_settings(self, settings_stub):
+        client = MagicMock()
+        service = SparqlService(client=client, settings=settings_stub, timeout=60.0)
+        assert service.timeout == 60.0
 
     async def test_rejects_mutating_query_before_request(self, settings_stub):
         service, client = _make_service(settings_stub)
@@ -101,6 +114,14 @@ class TestHealthCheck:
         health = await service.health_check()
         assert health.status == "down"
         assert "timeout" in health.error
+
+    async def test_uses_short_timeout_not_sparql_timeout(self, settings_stub):
+        settings_stub.sparql_timeout = 42.0
+        service, client = _make_service(
+            settings_stub, get=AsyncMock(return_value=_response(200))
+        )
+        await service.health_check()
+        assert client.get.call_args.kwargs["timeout"] == HEALTH_CHECK_TIMEOUT
 
     async def test_unexpected_exception_is_down(self, settings_stub):
         service, _ = _make_service(
