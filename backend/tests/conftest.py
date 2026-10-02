@@ -20,6 +20,11 @@ def settings_stub() -> SimpleNamespace:
         chat_max_tool_iterations=5,
         system_prompt_path="dummy_system.md",
         answer_system_prompt_path="dummy_answer.md",
+        # Off by default, so a turn's events are not mixed with title events; the
+        # title tests switch it on.
+        generate_session_titles=False,
+        session_title_prompt_path="dummy_title.md",
+        session_title_timeout=5.0,
         full_table_query_path="dummy_table.rq",
         full_table_columns=["name", "count"],
     )

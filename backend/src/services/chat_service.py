@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 import uuid
@@ -11,6 +12,7 @@ from src.models.events import (
     ChatEvent,
     DoneEvent,
     SessionEvent,
+    SessionTitleEvent,
     StepFinishedEvent,
     StepKind,
     StepStartedEvent,
@@ -181,6 +183,17 @@ def _step_error(exc: Exception) -> str:
     return str(exc) if isinstance(exc, AppException) else "Internal server error"
 
 
+def _fallback_title(question: str, max_length: int = 60) -> str:
+    """The session title when none is generated: the question as one line, cut at a
+    word boundary."""
+    clean = " ".join(question.split())
+    if len(clean) <= max_length:
+        return clean
+    cut = clean[:max_length]
+    space = cut.rfind(" ")
+    return (cut[:space] if space > max_length // 2 else cut).rstrip() + "…"
+
+
 NO_PREVIOUS_DATA_ANSWER = (
     "There are no previous query results available to fall back on. "
     "Please ask a new question."
@@ -225,6 +238,15 @@ class ChatService:
                 raise SessionNotFoundException(f"Session {session_id} not found")
             title = sessions[0].title
 
+        # A session gets its title on its first turn (or on a later one, if that
+        # failed before a title was stored). Without generation the shortened
+        # question is the title and already part of the `session` event.
+        needs_title = title is None
+        if needs_title and not self.settings.generate_session_titles:
+            title = _fallback_title(message)
+            await repo.set_title(session_id, title, manual=False)
+            needs_title = False
+
         # 2. Load history (last N complete turns) and the reusable-data map
         depth = self.settings.chat_history_depth
         history_msgs = await repo.get_history(session_id, turns=depth)
@@ -233,11 +255,15 @@ class ChatService:
         # 3. Persist the user message and open the assistant message of the turn
         message_id = await repo.start_turn(session_id, message)
         state.message_id = message_id
-        yield SessionEvent(session_id=session_id, message_id=message_id, title=title)
 
+        # The title is generated next to the turn, so it does not delay the stream.
+        title_task: asyncio.Task[str | None] | None = None
+        if needs_title:
+            title_task = asyncio.create_task(self._generate_title(message))
         try:
+            yield SessionEvent(session_id=session_id, message_id=message_id, title=title)
             async for event in self._run_turn(
-                session_id, message, history, turn_map, repo, state
+                session_id, message, history, turn_map, repo, state, title_task
             ):
                 yield event
         except Exception:
@@ -246,6 +272,10 @@ class ChatService:
             # handles it.)
             await self._mark_failed(repo, state)
             raise
+        finally:
+            # A no-op once the title is there; otherwise the run failed or was cancelled.
+            if title_task is not None:
+                title_task.cancel()
 
     async def _run_turn(
         self,
@@ -255,6 +285,7 @@ class ChatService:
         turn_map: dict[int, TurnData],
         repo: ChatRepository,
         state: TurnState,
+        title_task: asyncio.Task[str | None] | None,
     ) -> AsyncIterator[ChatEvent]:
         assert state.message_id is not None
         message_id = state.message_id
@@ -277,6 +308,14 @@ class ChatService:
         ordinal = 0
 
         for iteration in range(self.settings.chat_max_tool_iterations):
+            # Between iterations: the title, as soon as it is there. Stored through
+            # the run's own repository (a DB session must not be used concurrently).
+            if title_task is not None and title_task.done():
+                title_event = await self._store_title(title_task, session_id, message, repo)
+                title_task = None
+                if title_event is not None:
+                    yield title_event
+
             turn = await self.llm.chat_with_tools(messages, TOOLS)
 
             # Model stopped calling tools → data gathering is done. Produce the
@@ -350,7 +389,53 @@ class ChatService:
         yield AnswerEvent(delta=answer)
 
         await repo.complete_turn(session_id, message_id, content=answer, thinking=None)
+
+        # A title that is still being generated is waited for (with a timeout), so
+        # `session_title` always comes before `done`.
+        if title_task is not None:
+            title_event = await self._store_title(title_task, session_id, message, repo)
+            if title_event is not None:
+                yield title_event
         yield DoneEvent(message_id=message_id, row_count=row_count)
+
+    async def _generate_title(self, question: str) -> str | None:
+        """The generated title, or None if the call failed. Never raises: a title
+        must not fail the turn."""
+        try:
+            return await self.llm.generate_title(question)
+        except Exception as e:
+            logger.warning(f"Session title generation failed: {e}")
+            return None
+
+    async def _store_title(
+        self,
+        title_task: asyncio.Task[str | None],
+        session_id: uuid.UUID,
+        question: str,
+        repo: ChatRepository,
+    ) -> SessionTitleEvent | None:
+        """Store the generated title, or the shortened question if generation failed
+        or takes longer than the timeout. None if nothing was stored (the session
+        was renamed by hand in the meantime). Never raises."""
+        try:
+            title = await asyncio.wait_for(
+                title_task, timeout=self.settings.session_title_timeout
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Session title generation timed out")
+            title = None
+        title = title or _fallback_title(question)
+        try:
+            if not await repo.set_title(session_id, title, manual=False):
+                return None
+        except Exception:
+            logger.exception(f"Could not store the title of session {session_id}")
+            try:
+                await repo.rollback()
+            except Exception:
+                logger.exception("Rollback after a failed title update failed")
+            return None
+        return SessionTitleEvent(session_id=session_id, title=title)
 
     async def _close_failed_step(
         self, repo: ChatRepository, step_id: uuid.UUID, error: str, duration_ms: int

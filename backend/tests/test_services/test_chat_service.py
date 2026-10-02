@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -9,6 +10,7 @@ from src.models.events import (
     AnswerEvent,
     DoneEvent,
     SessionEvent,
+    SessionTitleEvent,
     StepFinishedEvent,
     StepStartedEvent,
 )
@@ -18,6 +20,7 @@ from src.services.chat_service import (
     NO_PREVIOUS_DATA_ANSWER,
     ChatService,
     TurnState,
+    _fallback_title,
 )
 from src.services.llm_service import LLMTurn, ToolCallResult
 from src.util.exceptions import (
@@ -54,6 +57,7 @@ def repo():
     repo.start_turn = AsyncMock(side_effect=lambda *args, **kwargs: uuid.uuid4())
     repo.start_step = AsyncMock(side_effect=lambda *args, **kwargs: uuid.uuid4())
     repo.get_step_result = AsyncMock(return_value=None)
+    repo.set_title = AsyncMock(return_value=True)
     return repo
 
 
@@ -63,6 +67,7 @@ def chat_service(settings_stub):
     llm.query_system_prompt = MagicMock(return_value="SYSTEM PROMPT")
     llm.chat_with_tools = AsyncMock()
     llm.generate_answer = AsyncMock(return_value="final answer")
+    llm.generate_title = AsyncMock(return_value="Generated title")
     llm.get_models = AsyncMock(return_value=ModelResponse(models={"m"}))
 
     sparql = MagicMock()
@@ -131,7 +136,6 @@ class TestSession:
         first = events[0]
         assert isinstance(first, SessionEvent)
         assert first.session_id == repo.create_session.return_value
-        assert first.title is None
         # message_id is the assistant message, also handed to the caller via the state
         assert first.message_id == state.message_id
         repo.get_sessions.assert_not_awaited()
@@ -167,6 +171,154 @@ class TestSession:
 
         # Question and running answer are written together (ChatRepository.start_turn).
         repo.start_turn.assert_awaited_once_with(events[0].session_id, "my question")
+
+
+class TestTitle:
+    @pytest.fixture
+    def titled(self, chat_service):
+        """The chat service with title generation switched on."""
+        service, llm, sparql, _ = chat_service
+        service.settings.generate_session_titles = True
+        return service, llm, sparql
+
+    async def test_title_is_generated_stored_and_sent_before_done(self, titled, repo):
+        service, llm, _ = titled
+        llm.chat_with_tools.side_effect = [_answer_turn("Hello.")]
+
+        events = await _run(service, repo, message="When do tulips flower?")
+
+        assert _names(events) == ["session", "answer", "session_title", "done"]
+        assert events[0].title is None  # the stream does not wait for the title
+        sid = events[0].session_id
+        assert events[2] == SessionTitleEvent(session_id=sid, title="Generated title")
+        llm.generate_title.assert_awaited_once_with("When do tulips flower?")
+        repo.set_title.assert_awaited_once_with(sid, "Generated title", manual=False)
+
+    async def test_title_that_is_ready_is_sent_between_loop_iterations(self, titled, repo):
+        service, llm, sparql = titled
+        llm.chat_with_tools.side_effect = [
+            _tool_turn("execute_sparql_query", {"query": QUERY}),
+            _answer_turn("done"),
+        ]
+
+        async def execute(query):
+            await asyncio.sleep(0)  # lets the title task run
+            return ONE_ROW
+
+        sparql.execute.side_effect = execute
+
+        events = await _run(service, repo)
+
+        assert _names(events) == [
+            "session", "step_started", "step_finished", "session_title", "answer", "done",
+        ]
+        repo.set_title.assert_awaited_once()
+
+    async def test_failing_call_falls_back_to_the_question(self, titled, repo):
+        service, llm, _ = titled
+        llm.chat_with_tools.side_effect = [_answer_turn("Hello.")]
+        llm.generate_title.side_effect = RuntimeError("llm down")
+
+        events = await _run(service, repo, message="When do tulips flower?")
+
+        assert _names(events) == ["session", "answer", "session_title", "done"]
+        assert events[2].title == "When do tulips flower?"
+        assert repo.set_title.await_args.args[1] == "When do tulips flower?"
+
+    async def test_hanging_call_falls_back_after_the_timeout(self, titled, repo):
+        service, llm, _ = titled
+        service.settings.session_title_timeout = 0.01
+        llm.chat_with_tools.side_effect = [_answer_turn("Hello.")]
+
+        async def hang(question):
+            await asyncio.sleep(60)
+
+        llm.generate_title.side_effect = hang
+
+        events = await _run(service, repo, message="my question")
+
+        # The turn itself is unaffected.
+        assert _names(events) == ["session", "answer", "session_title", "done"]
+        assert events[2].title == "my question"
+        repo.complete_turn.assert_awaited_once()
+
+    async def test_without_generation_the_fallback_is_in_the_session_event(
+        self, chat_service, repo
+    ):
+        service, llm, _, _ = chat_service  # generate_session_titles is off
+        llm.chat_with_tools.side_effect = [_answer_turn("Hello.")]
+
+        events = await _run(service, repo, message="my question")
+
+        assert _names(events) == ["session", "answer", "done"]
+        assert events[0].title == "my question"
+        repo.set_title.assert_awaited_once_with(events[0].session_id, "my question", manual=False)
+        llm.generate_title.assert_not_awaited()
+
+    async def test_session_with_a_title_gets_no_new_one(self, titled, repo):
+        service, llm, _ = titled
+        llm.chat_with_tools.side_effect = [_answer_turn("Hello.")]
+        repo.get_sessions.return_value = [SimpleNamespace(title="Tulips")]
+
+        events = await _run(service, repo, session_id=uuid.uuid4())
+
+        assert _names(events) == ["session", "answer", "done"]
+        assert events[0].title == "Tulips"
+        llm.generate_title.assert_not_awaited()
+        repo.set_title.assert_not_awaited()
+
+    async def test_title_set_by_hand_meanwhile_is_not_announced(self, titled, repo):
+        service, llm, _ = titled
+        llm.chat_with_tools.side_effect = [_answer_turn("Hello.")]
+        repo.set_title.return_value = False  # the repository kept the manual title
+
+        events = await _run(service, repo)
+
+        assert _names(events) == ["session", "answer", "done"]
+
+    async def test_failing_to_store_the_title_does_not_fail_the_turn(self, titled, repo):
+        service, llm, _ = titled
+        llm.chat_with_tools.side_effect = [_answer_turn("Hello.")]
+        repo.set_title.side_effect = ConnectionError("db gone")
+
+        events = await _run(service, repo)
+
+        assert _names(events) == ["session", "answer", "done"]
+        repo.fail_message.assert_not_awaited()
+
+    async def test_failed_turn_stops_the_title_call(self, titled, repo):
+        service, llm, _ = titled
+        llm.chat_with_tools.side_effect = RuntimeError("a bug")
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def hang(question):
+            started.set()
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        llm.generate_title.side_effect = hang
+
+        async def run_turn():
+            async for event in service.run(None, "hi", repo, TurnState()):
+                await asyncio.sleep(0)  # lets the title task start
+
+        with pytest.raises(RuntimeError):
+            await run_turn()
+        await asyncio.sleep(0)
+
+        assert started.is_set() and cancelled.is_set()
+
+    def test_fallback_title_is_cut_at_a_word_boundary(self):
+        question = "Which species in the botanical garden of Jena flowered first in the year 2021?"
+
+        title = _fallback_title(question)
+
+        assert title == "Which species in the botanical garden of Jena flowered…"
+        assert _fallback_title("  short\n question ") == "short question"
 
 
 class TestPlainAnswer:

@@ -201,6 +201,20 @@ class TestWrites:
         repo, _ = _make_repo(rowcount=0)
         assert await repo.set_title(uuid.uuid4(), "Title", manual=True) is False
 
+    async def test_generated_title_never_replaces_a_manual_one(self):
+        repo, session = _make_repo(rowcount=0)
+
+        assert await repo.set_title(uuid.uuid4(), "Generated", manual=False) is False
+
+        assert "title_is_manual" in _sql(session)[0].split("WHERE")[1]
+
+    async def test_manual_title_replaces_any_title(self):
+        repo, session = _make_repo()
+
+        assert await repo.set_title(uuid.uuid4(), "Mine", manual=True) is True
+
+        assert "title_is_manual" not in _sql(session)[0].split("WHERE")[1]
+
     async def test_count_messages_maps_sessions_to_counts(self):
         repo, session = _make_repo()
         a, b = uuid.uuid4(), uuid.uuid4()

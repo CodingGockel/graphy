@@ -89,11 +89,14 @@ class ChatRepository:
         return counts
 
     async def set_title(self, session_id: uuid.UUID, title: str, manual: bool) -> bool:
-        """Set the session title. Returns whether a session with that id existed."""
+        """Set the session title. A generated title (`manual=False`) never replaces a
+        manual one. Returns whether the title was set: False for an unknown id, or
+        for a generated title when the session has a manual one."""
+        statement = update(ChatSession).where(ChatSession.id == session_id)
+        if not manual:
+            statement = statement.where(ChatSession.title_is_manual.is_(False))
         result = await self._session.execute(
-            update(ChatSession)
-            .where(ChatSession.id == session_id)
-            .values(title=title, title_is_manual=manual)
+            statement.values(title=title, title_is_manual=manual)
         )
         await self._session.commit()
         return result.rowcount > 0  # type: ignore

@@ -15,6 +15,12 @@ from src.models.schemas import ServiceHealth, ModelResponse
 from src.util.logger import logger
 
 
+# Output-token cap of the title call. Far more than a title needs: a reasoning model
+# spends tokens on its <think> block first.
+TITLE_MAX_TOKENS = 256
+TITLE_MAX_LENGTH = 80
+
+
 @dataclass
 class ToolCallResult:
     tool_call_id: str
@@ -241,6 +247,31 @@ class LLMService:
             raise LLMNoContentException("LLM did not generate a final answer")
         # Strip any <think>…</think> reasoning the model leaked before the answer.
         return strip_think(content)
+
+    async def generate_title(self, question: str) -> str:
+        """A short session title for the first question of a session, as one line."""
+        messages = [
+            {"role": "system", "content": load_prompt(self.settings.session_title_prompt_path)},
+            {"role": "user", "content": question},
+        ]
+        try:
+            response: ChatCompletion = await self.client.chat.completions.create(
+                model=self.sparql_model,
+                temperature=self.temperature,
+                max_tokens=TITLE_MAX_TOKENS,
+                messages=messages,  # type: ignore
+            )
+        except Exception as e:
+            raise LLMServiceException(message=str(e)) from e
+
+        text = strip_think(response.choices[0].message.content or "")
+        # Reasoning that was cut off by the token cap is not a title.
+        lines = [] if "<think>" in text else [line.strip() for line in text.splitlines()]
+        title = next((line for line in lines if line), "")
+        title = " ".join(title.strip("\"'`*#“”„«» ").split()).rstrip(".")
+        if not title:
+            raise LLMNoContentException("LLM did not generate a title")
+        return title[:TITLE_MAX_LENGTH].rstrip()
 
     async def get_models(self) -> ModelResponse:
         try:
