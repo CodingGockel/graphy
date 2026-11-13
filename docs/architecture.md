@@ -111,7 +111,11 @@ clarification.
 
 The prompt tells the model to **resolve first**: every name the user mentions goes through
 `resolve_entity`, and the query then uses the returned URI instead of matching a label as text
-(labels may be in another language than the question).
+(labels may be in another language than the question). A name that is not found goes through a
+fixed order of attempts: `resolve_entity` again with another form of the name, then a query that
+matches the name as text. Only when that finds nothing either, the model calls `finish`, and the
+answer tells the user that no entity with that name could be found. The answer call is given the
+names the index did not know for this.
 
 **Context:** within a turn everything shares one context. The loop transcript grows with every
 tool call and its result (a large result is cut to a sample there). The answer call gets the

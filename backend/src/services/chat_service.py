@@ -106,6 +106,9 @@ class GatheredData:
     answer call. Failed steps leave nothing here."""
     # (term, candidates) of every resolve_entity step that found something.
     entities: list[tuple[str, list[dict]]] = field(default_factory=list)
+    # Terms a resolve_entity step found nothing for. A later query may still have
+    # found the name as text; the answer call sees both.
+    unresolved: list[str] = field(default_factory=list)
     # (query, results) of every successful query, new or reused.
     queries: list[tuple[str, str]] = field(default_factory=list)
 
@@ -137,8 +140,9 @@ def _truncate_results(raw: str, max_rows: int = 30, note: str = LOOP_TRUNCATION_
 
 def _answer_data(gathered: GatheredData) -> str:
     """Render what a turn gathered as the data of the final answer call: the resolved
-    entities and every query with its result. The last result (what the loop ended
-    on) is given in full, earlier ones shortened like in the loop."""
+    entities, the names the entity index did not know, and every query with its
+    result. The last result (what the loop ended on) is given in full, earlier ones
+    shortened like in the loop."""
     if not gathered.queries:
         parts = ["(no query executed)"]
     else:
@@ -154,6 +158,9 @@ def _answer_data(gathered: GatheredData) -> str:
             matches = "; ".join(f"\"{c['label']}\" <{c['uri']}>" for c in candidates)
             lines.append(f"- '{term}': {matches}")
         parts.insert(0, "\n".join(lines))
+    if gathered.unresolved:
+        names = ", ".join(f"'{term}'" for term in gathered.unresolved)
+        parts.insert(0, f"Names not found in the entity index: {names}")
     return "\n\n".join(parts)
 
 
@@ -161,9 +168,11 @@ def _format_candidates(term: str, candidates: list[dict]) -> str:
     """Render resolve_entity results as a tool message the model can act on."""
     if not candidates:
         return (
-            f"No candidates found for '{term}'. Try a different spelling or the "
-            "scientific name, or fall back to a SPARQL query using "
-            'FILTER(CONTAINS(LCASE(?label), "...")) on rdfs:label.'
+            f"No candidates found for '{term}'. Try once more with another form of the "
+            "name (English or scientific name, corrected spelling). If that finds "
+            "nothing either, look for the name as text with a SPARQL query using "
+            'FILTER(CONTAINS(LCASE(?label), "...")) on rdfs:label. Only if that query '
+            "is empty too, the entity does not exist: call finish."
         )
     lines = [f"Candidates for '{term}' (use the URI directly in your SPARQL query):"]
     for c in candidates:
@@ -406,8 +415,11 @@ class ChatService:
                     # sample goes back into the loop transcript.
                     gathered.queries.append((outcome.query or "", outcome.results))
                     row_count = outcome.count
-                elif kind == "resolve_entity" and outcome.ok and outcome.result:
-                    gathered.entities.append((args["term"], outcome.result))
+                elif kind == "resolve_entity" and outcome.ok:
+                    if outcome.result:
+                        gathered.entities.append((args["term"], outcome.result))
+                    else:
+                        gathered.unresolved.append(args["term"])
                 outputs.append((tc, outcome.output))
 
             if finished:

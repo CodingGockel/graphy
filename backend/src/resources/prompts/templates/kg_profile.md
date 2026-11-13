@@ -166,9 +166,17 @@ returned** (city URIs start with `http://www.wikidata.org/…`, garden URIs with
   ("Vienna", "Prague"; German cities as "Jena", "Halle (Saale)"): pass the English name ("Wien" →
   "Vienna"). When the user names a place without saying garden or city ("in Jena"), resolve it as a
   city.
-- **Fallback** — only if a name could not be resolved: match the species on the occurrence
-  (`?occ rdfs:label "<Latin name>"`, occurrence labels are exact Latin names) or the place on the
-  `geoIndexStatementUnit` label (`FILTER(CONTAINS(?gardenLabel, "Jena"))`).
+- **Matching a name as text** (attempt 3 of "Finding a named entity"):
+  - a **species** on the occurrences, whose `rdfs:label` is the Latin name:
+    `?occ a dwc:Occurrence ; rdfs:label ?species . FILTER(CONTAINS(LCASE(?species), "tulipa sylvestris"))`.
+    **About 40 species have records that are not linked to any taxon** (and some taxa are linked to
+    no record, because the records use an older synonym). So when a taxon URI yields no records at
+    all, always repeat the query with the Latin name(s) of that taxon on the occurrence label
+    before you conclude anything.
+  - a **garden or city** on the `geoIndexStatementUnit` label, which holds both names:
+    `FILTER(CONTAINS(LCASE(?gardenLabel), "jena"))`.
+  - a **common name** on the taxon labels: `?taxon a dwc:Taxon ; rdfs:label ?name .
+    FILTER(CONTAINS(LCASE(?name), "eibisch"))`.
 
 The statement-unit patterns above stay as they are; only the way the species and the place are
 selected changes — e.g. first-flower day of a resolved species in a resolved garden:

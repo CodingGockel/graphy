@@ -10,6 +10,7 @@
 | [Knowledge graph](./knowledge-graph.md) | GraphDB, SPARQL, entity resolution, onboarding a new KG. |
 | [Deployment](./deployment.md) | Docker stack, releases, public access via Cloudflare Tunnel. |
 | [Test questions](./test-questions.md) | Verified questions and answers for the PhenObs KG. |
+| [Benchmark](./benchmark.md) | Harder, scored question set for the PhenObs KG (multi-step questions, graph quirks, robustness, a conversation). |
 
 Other folders:
 

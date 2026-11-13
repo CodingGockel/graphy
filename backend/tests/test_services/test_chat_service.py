@@ -638,6 +638,31 @@ class TestSeveralToolCalls:
         assert "'Vienna': \"Vienna\" <http://x/vienna>" in data
         assert "'Jena': \"Jena\" <http://x/jena>" in data
 
+    async def test_name_without_a_candidate_is_reported_to_the_answer_call(
+        self, chat_service, repo
+    ):
+        service, llm, sparql, lucene = chat_service
+        lucene.search.side_effect = [[], [{"uri": "http://x/jena", "label": "Jena", "score": 9.0}]]
+        llm.chat_with_tools.side_effect = [
+            _tools_turn(
+                ("resolve_entity", {"term": "Atlantis"}), ("resolve_entity", {"term": "Jena"})
+            ),
+            _tool_turn("execute_sparql_query", {"query": QUERY}, call_id="q1"),
+            _finish_turn(),
+        ]
+
+        await _run(service, repo)
+
+        # the model is told how to go on: another form of the name, then a text match
+        transcript = llm.chat_with_tools.await_args.args[0]
+        reply = next(m for m in transcript if m.get("tool_call_id") == "c1")
+        assert "No candidates found for 'Atlantis'" in reply["content"]
+        assert "FILTER(CONTAINS" in reply["content"]
+
+        data = llm.generate_answer.await_args.args[1]
+        assert data.startswith("Names not found in the entity index: 'Atlantis'")
+        assert "'Jena': \"Jena\" <http://x/jena>" in data
+
     async def test_clarification_ends_the_turn_before_the_remaining_calls(
         self, chat_service, repo
     ):

@@ -25,7 +25,8 @@ You do NOT write the final prose answer — that happens in a separate step. You
 2. **Prefer structured, typed paths** for any filter, comparison, sorting or aggregation — follow the
    query patterns in the profile. Identify a named entity by the **URI** that `resolve_entity`
    returned, not by its name. Use `rdfs:label` + `FILTER(CONTAINS(LCASE(?l), "…"))` only as a
-   fallback when no structured path exists or the name could not be resolved.
+   fallback when no structured path exists, or as attempt 3 for a name (see "Finding a
+   named entity" below).
 3. **Datatypes are exact.** A plain literal in a triple pattern matches ONLY its exact datatype — e.g.
    an `xsd:int` value does NOT match the `xsd:integer` literal `2024`. Check the "Properties" table
    below; when a value is numeric, bind a variable and compare in a `FILTER`
@@ -41,9 +42,11 @@ You do NOT write the final prose answer — that happens in a separate step. You
 8. **The schema above is complete and verified — do NOT run exploratory "what classes / what
    properties exist" discovery queries.** Write the answer query directly. Aim to answer in a single
    `execute_sparql_query` call.
-9. **An empty result can be the correct answer** — the data may genuinely not exist. After a
-   well-formed structured query over resolved URIs returns nothing, do NOT keep mutating the filter:
-   call `finish`; the next step will report that no matching data was found.
+9. **An empty result can be the correct answer** — the data may genuinely not exist (e.g. no
+   records for that year). After a well-formed structured query over an entity that **was found**
+   returns nothing, do NOT keep mutating the filter: call `finish`; the next step will report that
+   no matching data was found. An entity that was **not found yet** is a different case: go through
+   the attempts under "Finding a named entity" first.
 10. **Never put `<think>`/reasoning into a tool call or its arguments.** A query argument must be the
     SPARQL string only.
 
@@ -56,11 +59,9 @@ structured query → `finish`**.
 - `resolve_entity`: full-text lookup over labels; returns the real URI(s) of a named entity (species,
   place, organization …) with all its labels. **Resolve first:** call it for every name the user
   mentions — also one that looks correctly spelled — before you write a query, and pass a `type` to
-  narrow it. Several names → one call per name, **all in the same reply**. Labels can be in another
-  language than the question: if a name returns nothing, try **once** more with its English (or
-  scientific) form; if that fails too, fall back to a label `FILTER`. A name whose URI you already got
-  earlier in this turn is not resolved again. The profile says how each kind of entity is used in a
-  query.
+  narrow it. Several names → one call per name, **all in the same reply**. A name whose URI you
+  already got earlier in this turn is not resolved again. The profile says how each kind of entity is
+  used in a query.
 - `execute_sparql_query`: run a SPARQL query. Aim for the answer in a **single** query (the schema is
   already given — do not explore first). A query that fails comes back to you with its error so you
   can fix and retry.
@@ -70,6 +71,28 @@ structured query → `finish`**.
 - `finish`: end the loop. Call it as soon as the results you have are enough to answer the question —
   all of them are handed to the answer step, not only the last one — or right away when the message
   needs no data (a greeting, a question about what you can do).
+
+# Finding a named entity
+
+A name the user gives (a species, a place, an organization …) is looked for in this order. Go to the
+next attempt only when the one before found nothing, and stop as soon as one finds it:
+
+1. **`resolve_entity`** with the name as given.
+2. **`resolve_entity` once more** with another form of the name: labels can be in another language
+   than the question, so try the English or the scientific name, or a corrected spelling.
+3. **Match the name as text** with `execute_sparql_query`: a query that looks for the name in the
+   labels (`FILTER(CONTAINS(LCASE(?label), "…"))`) of the kind of entity it should be — the profile
+   says on which nodes. Also do this when `resolve_entity` did return a URI but a query over that URI
+   finds **no data at all** for it: the data may be stored under the name instead of the URI.
+4. **Not found.** Only now it is certain that the graph has no such entity. Do not guess a similar
+   one and do not query on: call `finish`. The answer step then tells the user that no species /
+   place / … with that name could be found. If other parts of the question can still be answered,
+   gather their data first.
+
+"Not found" (the entity does not exist in the graph) is not the same as "no data" (the entity
+exists, but e.g. has no records for the year asked): the user is told which of the two it is, so
+make sure your queries show it — when in doubt, run one query that checks whether the entity has
+any data at all.
 
 # When to Ask for Clarification
 
